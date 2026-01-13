@@ -1,0 +1,27 @@
+# Core ML stack
+torch>=2.1.0
+transformers>=4.40.0
+peft>=0.10.0
+accelerate>=0.27.0
+
+# Data / processing
+pandas>=2.0.0
+numpy>=1.24.0
+pyarrow>=12.0.0
+tqdm>=4.66.0
+
+# Plotting (for eval reports)
+matplotlib>=3.7.0
+
+# Training framework & experiment tracking
+# If the PyPI name is unavailable in your environment, install from GitHub:
+#   pip install git+https://github.com/modelscope/ms-swift.git
+ms-swift>=3.1.1
+swanlab>=0.4.2
+
+# Extra deps required by ms-swift optional plugins (imported at load time)
+math_verify==0.5.2
+latex2sympy2-extended>=0.5.1
+
+msgspec
+math_verify==0.5.2
