@@ -62,6 +62,8 @@ def main() -> None:
                     help="DeepSeek retry count on connection errors (default: 3)")
     ap.add_argument("--sft-think-backoff", type=float, default=1.5,
                     help="Base backoff seconds for retries (default: 1.5)")
+    ap.add_argument("--sft-profile-mode", choices=["real", "neutral", "none"], default="neutral",
+                    help="Profile context mode for SFT prompts (default: neutral)")
     ap.add_argument("--grpo-no-think-example", action="store_true",
                     help="Disable think/answer placeholder example in GRPO dataset")
     ap.add_argument("--emit-base-min-test", action="store_true",
@@ -217,6 +219,7 @@ def main() -> None:
             contract_mode="delta",
             decimals=2,
             think_template="",
+            profile_mode=args.sft_profile_mode,
             label=f"sft_train_{t}",
             progress_every=100,
             curr_only_prompt=True,

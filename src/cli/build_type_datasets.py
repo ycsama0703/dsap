@@ -188,6 +188,30 @@ THINK_PLACEHOLDER = (
     "</think>"
 )
 GRPO_ANSWER_PLACEHOLDER = "<value>"
+_NEUTRAL_PROFILE_SUMMARY = "Neutral placeholder profile for format-only SFT."
+
+
+def _build_neutral_profile_context() -> dict:
+    return {
+        "objective_weights": {
+            "risk_aversion": 0.333333,
+            "herd_behavior": 0.333333,
+            "profit_driven": 0.333333,
+        },
+        "philosophy": {
+            "style": "neutral",
+            "activity": "neutral",
+            "benchmark_orientation": "neutral",
+            "horizon": "neutral",
+        },
+        "constraints": {
+            "risk_tolerance": "neutral",
+            "turnover_constraint": "neutral",
+            "concentration_constraint": "neutral",
+            "herd_tendency": "neutral",
+        },
+        "summary": _NEUTRAL_PROFILE_SUMMARY,
+    }
 
 
 def _convert_prompts_to_sft(
@@ -200,6 +224,7 @@ def _convert_prompts_to_sft(
     contract_mode: str = "delta",
     decimals: int = 2,
     think_template: str = "",
+    profile_mode: str = "real",
     limit: Optional[int] = None,
     label: str = "sft",
     progress_every: int = 100,
@@ -210,6 +235,9 @@ def _convert_prompts_to_sft(
 
     if contract_mode not in {"absolute", "delta"}:
         raise ValueError(f"unknown contract_mode={contract_mode}")
+    profile_mode = (profile_mode or "real").lower()
+    if profile_mode not in {"real", "neutral", "none"}:
+        raise ValueError(f"unknown profile_mode={profile_mode}")
     resolver = _resolve_delta if contract_mode == "delta" else _resolve_absolute
     answer_key = "holding_log_delta" if contract_mode == "delta" else "holding_tp1"
 
@@ -271,32 +299,37 @@ def _convert_prompts_to_sft(
             resp_json = json.dumps({answer_key: value}, ensure_ascii=False)
             mgrno_val = rec.get("mgrno")
             system_content = _build_system_prompt(inv_type, mgrno_val) if inv_type else system
-            # inject profile_context using type/profile semantics if available
-            semantics_ctx = {}
-            if inv_type is not None:
-                semantics_ctx = sem_map_profiles.get((inv_type, int(profile_val)), {})
-                if not semantics_ctx:
-                    semantics_ctx = sem_map_type.get(inv_type, {})
-            if semantics_ctx:
-                ow_sem = semantics_ctx.get("objective_weights") or {}
-                # normalize keys to risk_aversion/herd_behavior/profit_driven
-                ow_norm = {
-                    "risk_aversion": ow_sem.get("risk_aversion") if "risk_aversion" in ow_sem else ow_sem.get("risk"),
-                    "herd_behavior": ow_sem.get("herd_behavior") if "herd_behavior" in ow_sem else ow_sem.get("tc"),
-                    "profit_driven": ow_sem.get("profit_driven") if "profit_driven" in ow_sem else ow_sem.get("alpha"),
-                }
-                ow_norm = {k: v for k, v in ow_norm.items() if v is not None}
-                ctx = {
-                    "profile_id": semantics_ctx.get("profile_id") or f"{inv_type}_p{int(profile_val)}",
-                    "objective_weights": ow_norm if ow_norm else semantics_ctx.get("objective_weights"),
-                }
-                # include philosophy/constraints if present
-                if "philosophy" in semantics_ctx:
-                    ctx["philosophy"] = semantics_ctx.get("philosophy")
-                if "constraints" in semantics_ctx:
-                    ctx["constraints"] = semantics_ctx.get("constraints")
-                if "summary" in semantics_ctx:
-                    ctx["summary"] = semantics_ctx.get("summary")
+            # inject profile_context
+            ctx = None
+            if profile_mode == "neutral":
+                ctx = _build_neutral_profile_context()
+            elif profile_mode == "real":
+                semantics_ctx = {}
+                if inv_type is not None:
+                    semantics_ctx = sem_map_profiles.get((inv_type, int(profile_val)), {})
+                    if not semantics_ctx:
+                        semantics_ctx = sem_map_type.get(inv_type, {})
+                if semantics_ctx:
+                    ow_sem = semantics_ctx.get("objective_weights") or {}
+                    # normalize keys to risk_aversion/herd_behavior/profit_driven
+                    ow_norm = {
+                        "risk_aversion": ow_sem.get("risk_aversion") if "risk_aversion" in ow_sem else ow_sem.get("risk"),
+                        "herd_behavior": ow_sem.get("herd_behavior") if "herd_behavior" in ow_sem else ow_sem.get("tc"),
+                        "profit_driven": ow_sem.get("profit_driven") if "profit_driven" in ow_sem else ow_sem.get("alpha"),
+                    }
+                    ow_norm = {k: v for k, v in ow_norm.items() if v is not None}
+                    ctx = {
+                        "profile_id": semantics_ctx.get("profile_id") or f"{inv_type}_p{int(profile_val)}",
+                        "objective_weights": ow_norm if ow_norm else semantics_ctx.get("objective_weights"),
+                    }
+                    # include philosophy/constraints if present
+                    if "philosophy" in semantics_ctx:
+                        ctx["philosophy"] = semantics_ctx.get("philosophy")
+                    if "constraints" in semantics_ctx:
+                        ctx["constraints"] = semantics_ctx.get("constraints")
+                    if "summary" in semantics_ctx:
+                        ctx["summary"] = semantics_ctx.get("summary")
+            if ctx:
                 prompt = "<profile_context>\n" + json.dumps(ctx, ensure_ascii=False) + "\n</profile_context>\n\n" + prompt
             msgs = [
                 {"role": "system", "content": system_content},
@@ -312,54 +345,69 @@ def _convert_prompts_to_sft(
                         think_text = think_template
                     else:
                         # profile-conditioned prompt (no label leakage)
-                        profile_id = f"{inv_type}_p{int(profile_val)}" if inv_type is not None else None
-                        semantics_path = Path("artifacts/features/profile_semantics_llm.json")
-                        sem_map = {}
-                        sem_type_path = Path("artifacts/features/type_profile_semantics.json")
-                        sem_type_map = {}
-                        try:
-                            if semantics_path.exists():
-                                data = json.loads(semantics_path.read_text(encoding="utf-8"))
-                                for item in data:
-                                    pid = item.get("profile_id")
-                                    if pid:
-                                        sem_map[pid] = item
-                        except Exception as e:
-                            print(f"[warn] failed to load profile semantics: {e}")
-                        try:
-                            if sem_type_path.exists():
-                                data = json.loads(sem_type_path.read_text(encoding="utf-8"))
-                                for item in data:
-                                    t = item.get("investor_type")
-                                    if t:
-                                        sem_type_map[t] = item
-                        except Exception as e:
-                            print(f"[warn] failed to load type profile semantics: {e}")
-                        sem = sem_map.get(profile_id, {})
-                        if not sem and inv_type:
-                            sem = sem_type_map.get(inv_type, {})
-                        phi = sem.get("philosophy", {}) if isinstance(sem, dict) else {}
-                        cons = sem.get("constraints", {}) if isinstance(sem, dict) else {}
-                        obj = sem.get("objective_weights", {}) if isinstance(sem, dict) else {}
-                        # Normalize objective weights for description (prefer new schema; fallback to legacy keys)
-                        risk_pref = obj.get("risk_aversion")
-                        if risk_pref is None:
-                            risk_pref = obj.get("risk")
-                        herd_pref = obj.get("herd_behavior")
-                        if herd_pref is None:
-                            herd_pref = obj.get("tc")
-                        prof_pref = obj.get("profit_driven")
-                        if prof_pref is None:
-                            prof_pref = obj.get("alpha")
-                        profile_desc = (
-                            f"- Style: {phi.get('style','NA')}\n"
-                            f"- Activity: {phi.get('activity','NA')}\n"
-                            f"- Risk tolerance: {cons.get('risk_tolerance','NA')}\n"
-                            f"- Turnover preference: {cons.get('turnover_constraint','NA')}\n"
-                            f"- Objective emphasis: risk_aversion={risk_pref if risk_pref is not None else 'NA'}, "
-                            f"herd_behavior={herd_pref if herd_pref is not None else 'NA'}, "
-                            f"profit_driven={prof_pref if prof_pref is not None else 'NA'}\n"
-                        )
+                        if profile_mode != "real":
+                            neutral_ctx = _build_neutral_profile_context()
+                            phi = neutral_ctx.get("philosophy", {})
+                            cons = neutral_ctx.get("constraints", {})
+                            obj = neutral_ctx.get("objective_weights", {})
+                            profile_desc = (
+                                f"- Style: {phi.get('style','NA')}\n"
+                                f"- Activity: {phi.get('activity','NA')}\n"
+                                f"- Risk tolerance: {cons.get('risk_tolerance','NA')}\n"
+                                f"- Turnover preference: {cons.get('turnover_constraint','NA')}\n"
+                                f"- Objective emphasis: risk_aversion={obj.get('risk_aversion','NA')}, "
+                                f"herd_behavior={obj.get('herd_behavior','NA')}, "
+                                f"profit_driven={obj.get('profit_driven','NA')}\n"
+                            )
+                        else:
+                            profile_id = f"{inv_type}_p{int(profile_val)}" if inv_type is not None else None
+                            semantics_path = Path("artifacts/features/profile_semantics_llm.json")
+                            sem_map = {}
+                            sem_type_path = Path("artifacts/features/type_profile_semantics.json")
+                            sem_type_map = {}
+                            try:
+                                if semantics_path.exists():
+                                    data = json.loads(semantics_path.read_text(encoding="utf-8"))
+                                    for item in data:
+                                        pid = item.get("profile_id")
+                                        if pid:
+                                            sem_map[pid] = item
+                            except Exception as e:
+                                print(f"[warn] failed to load profile semantics: {e}")
+                            try:
+                                if sem_type_path.exists():
+                                    data = json.loads(sem_type_path.read_text(encoding="utf-8"))
+                                    for item in data:
+                                        t = item.get("investor_type")
+                                        if t:
+                                            sem_type_map[t] = item
+                            except Exception as e:
+                                print(f"[warn] failed to load type profile semantics: {e}")
+                            sem = sem_map.get(profile_id, {})
+                            if not sem and inv_type:
+                                sem = sem_type_map.get(inv_type, {})
+                            phi = sem.get("philosophy", {}) if isinstance(sem, dict) else {}
+                            cons = sem.get("constraints", {}) if isinstance(sem, dict) else {}
+                            obj = sem.get("objective_weights", {}) if isinstance(sem, dict) else {}
+                            # Normalize objective weights for description (prefer new schema; fallback to legacy keys)
+                            risk_pref = obj.get("risk_aversion")
+                            if risk_pref is None:
+                                risk_pref = obj.get("risk")
+                            herd_pref = obj.get("herd_behavior")
+                            if herd_pref is None:
+                                herd_pref = obj.get("tc")
+                            prof_pref = obj.get("profit_driven")
+                            if prof_pref is None:
+                                prof_pref = obj.get("alpha")
+                            profile_desc = (
+                                f"- Style: {phi.get('style','NA')}\n"
+                                f"- Activity: {phi.get('activity','NA')}\n"
+                                f"- Risk tolerance: {cons.get('risk_tolerance','NA')}\n"
+                                f"- Turnover preference: {cons.get('turnover_constraint','NA')}\n"
+                                f"- Objective emphasis: risk_aversion={risk_pref if risk_pref is not None else 'NA'}, "
+                                f"herd_behavior={herd_pref if herd_pref is not None else 'NA'}, "
+                                f"profit_driven={prof_pref if prof_pref is not None else 'NA'}\n"
+                            )
                         try:
                             api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY")
                             api_base = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com/v1")
@@ -547,6 +595,8 @@ def _convert_prompts_to_grpo(
                 if semantics:
                     ctx["philosophy"] = semantics.get("philosophy", {})
                     ctx["constraints"] = semantics.get("constraints", {})
+                    if "summary" in semantics:
+                        ctx["summary"] = semantics.get("summary")
                 profile_context = "<profile_context>\n" + json.dumps(ctx, ensure_ascii=False) + "\n</profile_context>\n\n"
                 prompt = profile_context + prompt
 
@@ -675,6 +725,8 @@ def main():
                     help="Target for SFT outputs (default: delta)")
     ap.add_argument("--sft-decimals", type=int, default=2,
                     help="Round SFT labels to this many decimals (default: 2)")
+    ap.add_argument("--sft-profile-mode", choices=["real", "neutral", "none"], default="neutral",
+                    help="Profile context mode for SFT prompts (default: neutral)")
     ap.add_argument("--sft-think-template", type=str,
                     default="",
                     help="Template injected when --sft-with-think is active (leave blank to auto-generate reasoning)")
@@ -852,6 +904,7 @@ def main():
         contract_mode=args.sft_contract_mode,
         decimals=args.sft_decimals,
         think_template=args.sft_think_template,
+        profile_mode=args.sft_profile_mode,
         label=f"sft_train_{t}",
         progress_every=100,
         curr_only_prompt=args.prompt_curr_only,

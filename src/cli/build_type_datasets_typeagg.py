@@ -169,6 +169,8 @@ def _convert_prompts_to_test_optional_label(
                 if semantics:
                     ctx["philosophy"] = semantics.get("philosophy", {})
                     ctx["constraints"] = semantics.get("constraints", {})
+                    if "summary" in semantics:
+                        ctx["summary"] = semantics.get("summary")
                 if ctx:
                     prompt = "<profile_context>\n" + json.dumps(ctx, ensure_ascii=False) + "\n</profile_context>\n\n" + prompt
 
@@ -404,6 +406,8 @@ def main() -> None:
                     help="Target for SFT outputs (default: delta)")
     ap.add_argument("--sft-decimals", type=int, default=2,
                     help="Decimal places for SFT/TEST labels (default: 2)")
+    ap.add_argument("--sft-profile-mode", choices=["real", "neutral", "none"], default="neutral",
+                    help="Profile context mode for SFT prompts (default: neutral)")
 
     ap.add_argument("--grpo-no-think-example", action="store_true",
                     help="Disable think/answer placeholder example in GRPO dataset")
@@ -550,6 +554,7 @@ def main() -> None:
         contract_mode=args.sft_contract_mode,
         decimals=args.sft_decimals,
         think_template=think_template,
+        profile_mode=args.sft_profile_mode,
         label=f"sft_train_{t}",
         progress_every=100,
         curr_only_prompt=True,
