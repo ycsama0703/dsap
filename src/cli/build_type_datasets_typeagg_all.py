@@ -35,7 +35,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Build SFT/GRPO datasets for all type-agg panels")
     ap.add_argument("--in-dir", type=Path, default=Path("data/processed/type_agg"),
                     help="Input directory with type-aggregated parquet files")
-    ap.add_argument("--out-root", type=Path, default=Path("artifacts_typeagg_all"),
+    ap.add_argument("--out-root", type=Path, default=Path("artifacts/typeagg_all"),
                     help="Root output directory")
     ap.add_argument("--types", type=str, default="",
                     help="Comma-separated type names; empty = auto-discover from --in-dir")
@@ -200,6 +200,7 @@ def main() -> None:
                 sft_think,
                 curr_only_prompt=True,
                 strict=args.sft_think_strict,
+                profile_mode=args.sft_profile_mode,
                 max_workers=args.sft_think_workers,
                 max_retries=args.sft_think_retries,
                 backoff_sec=args.sft_think_backoff,

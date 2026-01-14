@@ -82,7 +82,7 @@ PYTHONPATH=. python scripts/recompute_stock_quarter_features_yf.py \
 ```bash
 PYTHONPATH=. python -m src.cli.build_type_datasets_typeagg_all \
   --in-dir data/processed/type_agg_stock_yf \
-  --out-root artifacts_typeagg_all \
+  --out-root artifacts/typeagg_all \
   --sft-profile-mode neutral \
   --sft-end 2017-12-31 \
   --grpo-start 2018-01-01 \
@@ -93,9 +93,9 @@ PYTHONPATH=. python -m src.cli.build_type_datasets_typeagg_all \
 ```
 
 Outputs:
-- `artifacts_typeagg_all/sft/sft_train_<type>.jsonl`
-- `artifacts_typeagg_all/grpo/grpo_<type>.jsonl`
-- `artifacts_typeagg_all/test/test_<type>_all.jsonl`
+- `artifacts/typeagg_all/sft/sft_train_<type>.jsonl`
+- `artifacts/typeagg_all/grpo/grpo_<type>.jsonl`
+- `artifacts/typeagg_all/test/test_<type>_all.jsonl`
 
 ### 6) SFT training (ms-swift, all types)
 ```bash
@@ -103,18 +103,18 @@ TYPES=(banks households insurance_companies investment_advisors mutual_funds pen
 for t in "${TYPES[@]}"; do
   bash scripts/sft.sh \
     -m /path/to/Qwen2.5-7B-Instruct \
-    -d "artifacts_typeagg_all/sft/sft_train_${t}.jsonl" \
+    -d "artifacts/typeagg_all/sft/sft_train_${t}.jsonl" \
     -o "outputs/sft_${t}"
 done
 ```
 
 ### 7) Profile evolution (optional, between SFT and GRPO)
-If you skip this step, go directly to GRPO using `artifacts_typeagg_all/grpo/*`.
-If you run this, regenerate GRPO/Test in step 8 and train on `artifacts_typeagg_all_v2/grpo/*`.
+If you skip this step, go directly to GRPO using `artifacts/typeagg_all/grpo/*`.
+If you run this, regenerate GRPO/Test in step 8 and train on `artifacts/typeagg_all_v2/grpo/*`.
 
 ```bash
 PYTHONPATH=. python scripts/profile_evolution.py \
-  --test-path artifacts_typeagg_all/test/test_banks_all.jsonl \
+  --test-path artifacts/typeagg_all/test/test_banks_all.jsonl \
   --investor-type banks \
   --eval-size 80 \
   --k-reasoning 4 \
@@ -129,7 +129,7 @@ PYTHONPATH=. python scripts/profile_evolution.py \
 ```bash
 PYTHONPATH=. python -m src.cli.build_type_datasets_typeagg_all \
   --in-dir data/processed/type_agg_stock_yf \
-  --out-root artifacts_typeagg_all_v2 \
+  --out-root artifacts/typeagg_all_v2 \
   --sft-limit 0 \
   --grpo-limit 1000 \
   --test-limit 0 \
@@ -142,7 +142,7 @@ PYTHONPATH=. python -m src.cli.build_type_datasets_typeagg_all \
 ### 9) GRPO training (ms-swift, all types)
 ```bash
 TYPES=(banks households insurance_companies investment_advisors mutual_funds pension_funds other)
-GRPO_ROOT=artifacts_typeagg_all_v2
+GRPO_ROOT=artifacts/typeagg_all_v2
 for t in "${TYPES[@]}"; do
   PYTHONPATH=. bash scripts/grpo.sh \
     -m /path/to/Qwen2.5-7B-Instruct \
@@ -161,4 +161,3 @@ Defaults are defined in `scripts/grpo.sh`:
 contract_holdings  huber_holdings  profile_numeric_deviation
 ```
 No MSE reward is used by default. Adjust `REWARD_FUNCS` / `REWARD_WEIGHTS` in `scripts/grpo.sh` if needed.
-

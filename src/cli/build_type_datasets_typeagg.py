@@ -225,6 +225,7 @@ def _enrich_prompts_with_deepseek(
     *,
     curr_only_prompt: bool,
     strict: bool,
+    profile_mode: str = "real",
     max_workers: int = 1,
     max_retries: int = 0,
     backoff_sec: float = 1.0,
@@ -255,8 +256,12 @@ def _enrich_prompts_with_deepseek(
         if not prompt:
             return idx, None
 
+        neutral_hint = ""
+        if (profile_mode or "").lower() != "real":
+            neutral_hint = "Assume a neutral investor profile; do not reference profile-specific preferences.\n"
         ds_prompt = (
             "You are a financial reasoning assistant.\n\n"
+            f"{neutral_hint}"
             "Given the current data below, write a concise reasoning (<=3 sentences) inside "
             "<think>...</think> explaining the expected direction/magnitude of the holding change. "
             "Do NOT mention any true labels.\n\n---\n"
@@ -357,7 +362,7 @@ def main() -> None:
     ap.add_argument("--type", required=True, help="Firm type stem, e.g., 'banks'")
     ap.add_argument("--in-dir", type=str, default="data/processed/type_agg",
                     help="Input directory with type-aggregated parquet files")
-    ap.add_argument("--out-root", type=str, default="artifacts_typeagg",
+    ap.add_argument("--out-root", type=str, default="artifacts/typeagg",
                     help="Root output directory (separate from legacy artifacts)")
     ap.add_argument("--per-type-limit", type=int, default=1000)
     ap.add_argument("--sft-limit", type=int, default=None)
@@ -538,6 +543,7 @@ def main() -> None:
             prompts_sft_think,
             curr_only_prompt=True,
             strict=args.sft_think_strict,
+            profile_mode=args.sft_profile_mode,
             max_workers=args.sft_think_workers,
             max_retries=args.sft_think_retries,
             backoff_sec=args.sft_think_backoff,
