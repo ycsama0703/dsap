@@ -189,10 +189,82 @@ THINK_PLACEHOLDER = (
 )
 GRPO_ANSWER_PLACEHOLDER = "<value>"
 _NEUTRAL_PROFILE_SUMMARY = "Neutral placeholder profile for format-only SFT."
+_PROFILE_STATS_PATH = Path("data/grpo_profile_stats.csv")
+_PROFILE_STRENGTH_CACHE: dict | None = None
+
+
+def _load_profile_strength_stats() -> dict:
+    global _PROFILE_STRENGTH_CACHE
+    if _PROFILE_STRENGTH_CACHE is not None:
+        return _PROFILE_STRENGTH_CACHE
+    stats: dict[str, dict] = {}
+    global_means = {"x_risk_mean": 0.0, "x_herd_mean": 0.0, "x_profit_mean": 0.0}
+    if _PROFILE_STATS_PATH.exists():
+        try:
+            df = pd.read_csv(_PROFILE_STATS_PATH)
+            for col in ("x_risk_mean", "x_herd_mean", "x_profit_mean"):
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            for col in ("x_risk_mean", "x_herd_mean", "x_profit_mean"):
+                vals = df[col].dropna()
+                if not vals.empty:
+                    global_means[col] = float(vals.mean())
+            for _, row in df.iterrows():
+                t = row.get("type")
+                if not t:
+                    continue
+                x_r = float(row.get("x_risk_mean")) if pd.notna(row.get("x_risk_mean")) else global_means["x_risk_mean"]
+                x_h = float(row.get("x_herd_mean")) if pd.notna(row.get("x_herd_mean")) else global_means["x_herd_mean"]
+                x_p = float(row.get("x_profit_mean")) if pd.notna(row.get("x_profit_mean")) else global_means["x_profit_mean"]
+                stats[str(t)] = {
+                    "x_risk_mean": x_r,
+                    "x_herd_mean": x_h,
+                    "x_profit_mean": x_p,
+                    "overall_mean": float((abs(x_r) + abs(x_h) + abs(x_p)) / 3.0),
+                }
+        except Exception as e:
+            print(f"[warn] failed to load profile stats: {e}")
+    _PROFILE_STRENGTH_CACHE = {"stats": stats, "global_means": global_means}
+    return _PROFILE_STRENGTH_CACHE
+
+
+def _get_profile_strength(inv_type: str | None, mode: str) -> dict | None:
+    mode = (mode or "real").lower()
+    if mode == "none":
+        return None
+    data = _load_profile_strength_stats()
+    stats = data.get("stats", {})
+    global_means = data.get("global_means", {})
+    if mode == "neutral":
+        x_r = float(global_means.get("x_risk_mean", 0.0))
+        x_h = float(global_means.get("x_herd_mean", 0.0))
+        x_p = float(global_means.get("x_profit_mean", 0.0))
+        return {
+            "mode": "neutral_mean",
+            "x_risk_mean": x_r,
+            "x_herd_mean": x_h,
+            "x_profit_mean": x_p,
+            "overall_mean": float((abs(x_r) + abs(x_h) + abs(x_p)) / 3.0),
+        }
+    if inv_type and inv_type in stats:
+        out = dict(stats[inv_type])
+        out["mode"] = "type_mean"
+        return out
+    if global_means:
+        x_r = float(global_means.get("x_risk_mean", 0.0))
+        x_h = float(global_means.get("x_herd_mean", 0.0))
+        x_p = float(global_means.get("x_profit_mean", 0.0))
+        return {
+            "mode": "fallback_global",
+            "x_risk_mean": x_r,
+            "x_herd_mean": x_h,
+            "x_profit_mean": x_p,
+            "overall_mean": float((abs(x_r) + abs(x_h) + abs(x_p)) / 3.0),
+        }
+    return None
 
 
 def _build_neutral_profile_context() -> dict:
-    return {
+    ctx = {
         "objective_weights": {
             "risk_aversion": 0.333333,
             "herd_behavior": 0.333333,
@@ -212,6 +284,10 @@ def _build_neutral_profile_context() -> dict:
         },
         "summary": _NEUTRAL_PROFILE_SUMMARY,
     }
+    strength = _get_profile_strength(None, mode="neutral")
+    if strength:
+        ctx["profile_strength"] = strength
+    return ctx
 
 
 def _convert_prompts_to_sft(
@@ -329,6 +405,10 @@ def _convert_prompts_to_sft(
                         ctx["constraints"] = semantics_ctx.get("constraints")
                     if "summary" in semantics_ctx:
                         ctx["summary"] = semantics_ctx.get("summary")
+            if ctx and "profile_strength" not in ctx:
+                strength = _get_profile_strength(inv_type, mode=profile_mode)
+                if strength:
+                    ctx["profile_strength"] = strength
             if ctx:
                 prompt = "<profile_context>\n" + json.dumps(ctx, ensure_ascii=False) + "\n</profile_context>\n\n" + prompt
             msgs = [
@@ -597,6 +677,10 @@ def _convert_prompts_to_grpo(
                     ctx["constraints"] = semantics.get("constraints", {})
                     if "summary" in semantics:
                         ctx["summary"] = semantics.get("summary")
+                if "profile_strength" not in ctx:
+                    strength = _get_profile_strength(inv_type, mode="real")
+                    if strength:
+                        ctx["profile_strength"] = strength
                 profile_context = "<profile_context>\n" + json.dumps(ctx, ensure_ascii=False) + "\n</profile_context>\n\n"
                 prompt = profile_context + prompt
 

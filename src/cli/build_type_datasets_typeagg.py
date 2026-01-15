@@ -19,6 +19,7 @@ from src.cli.build_type_datasets import (
     _build_system_prompt,
     _convert_prompts_to_grpo,
     _convert_prompts_to_sft,
+    _get_profile_strength,
     _load_market_quarterly_safe,
 )
 
@@ -171,6 +172,10 @@ def _convert_prompts_to_test_optional_label(
                     ctx["constraints"] = semantics.get("constraints", {})
                     if "summary" in semantics:
                         ctx["summary"] = semantics.get("summary")
+                if "profile_strength" not in ctx:
+                    strength = _get_profile_strength(inv_type, mode="real")
+                    if strength:
+                        ctx["profile_strength"] = strength
                 if ctx:
                     prompt = "<profile_context>\n" + json.dumps(ctx, ensure_ascii=False) + "\n</profile_context>\n\n" + prompt
 

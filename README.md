@@ -78,24 +78,23 @@ PYTHONPATH=. python scripts/recompute_stock_quarter_features_yf.py \
   --fill-only
 ```
 
-### 5) Build SFT/GRPO/Test (SFT uses neutral profile)
+### 5) Stage A: build SFT only (neutral profile)
+Use the script so GRPO is disabled and SFT uses neutral profiles.  
+Note: this stage still writes a temporary TEST file, but it is **ignored** later.
+
 ```bash
-PYTHONPATH=. python -m src.cli.build_type_datasets_typeagg_all \
-  --in-dir data/processed/type_agg_stock_yf \
-  --out-root artifacts/typeagg_all \
-  --sft-profile-mode neutral \
-  --sft-end 2017-12-31 \
-  --grpo-start 2018-01-01 \
-  --grpo-end 2022-12-31 \
-  --test-start 2023-01-01 \
-  --sft-limit 1000 \
-  --grpo-limit 1000
+SFT_END=2015-12-31 \
+GRPO_START=2016-01-01 \
+GRPO_END=2019-12-31 \
+TEST_START=2020-01-01 \
+SFT_LIMIT=1000 \
+GRPO_LIMIT=0 \
+SFT_PROFILE_MODE=neutral \
+bash scripts/gen_sft_data_typeagg.sh
 ```
 
-Outputs:
+Outputs (used in SFT training):
 - `artifacts/typeagg_all/sft/sft_train_<type>.jsonl`
-- `artifacts/typeagg_all/grpo/grpo_<type>.jsonl`
-- `artifacts/typeagg_all/test/test_<type>_all.jsonl`
 
 ### 6) SFT training (ms-swift, all types)
 ```bash
@@ -108,35 +107,27 @@ for t in "${TYPES[@]}"; do
 done
 ```
 
-### 7) Profile evolution (optional, between SFT and GRPO)
-If you skip this step, go directly to GRPO using `artifacts/typeagg_all/grpo/*`.
-If you run this, regenerate GRPO/Test in step 8 and train on `artifacts/typeagg_all_v2/grpo/*`.
+### 7) Stage B: profile evolution (between SFT and GRPO)
+This updates `artifacts/features/type_profile_semantics.json`.  
+After this step, you **must** regenerate GRPO + TEST.
 
 ```bash
-PYTHONPATH=. python scripts/profile_evolution.py \
-  --test-path artifacts/typeagg_all/test/test_banks_all.jsonl \
-  --investor-type banks \
-  --eval-size 80 \
-  --k-reasoning 4 \
-  --temperature 0.4 \
-  --base-model /path/to/Qwen2.5-7B-Instruct \
-  --lora-path outputs/sft_banks \
-  --out-dir outputs/profile_evo/banks \
-  --write-profile-path artifacts/features/type_profile_semantics.json
+BASE_MODEL=/path/to/Qwen2.5-7B-Instruct \
+SFT_OUT_ROOT=outputs \
+TEST_ROOT=artifacts/typeagg_all/test \
+PROFILE_PATH=artifacts/features/type_profile_semantics.json \
+OUT_DIR_ROOT=outputs/profile_evo \
+bash scripts/evolve_profiles_typeagg.sh
 ```
 
-### 8) Rebuild GRPO/Test with updated profiles (after evolution)
+### 8) Stage C: rebuild GRPO + TEST with updated profiles
 ```bash
-PYTHONPATH=. python -m src.cli.build_type_datasets_typeagg_all \
-  --in-dir data/processed/type_agg_stock_yf \
-  --out-root artifacts/typeagg_all_v2 \
-  --sft-limit 0 \
-  --grpo-limit 1000 \
-  --test-limit 0 \
-  --sft-end 2017-12-31 \
-  --grpo-start 2018-01-01 \
-  --grpo-end 2022-12-31 \
-  --test-start 2023-01-01
+SFT_END=2015-12-31 \
+GRPO_START=2016-01-01 \
+GRPO_END=2019-12-31 \
+TEST_START=2020-01-01 \
+GRPO_LIMIT=1000 \
+bash scripts/gen_grpo_test_typeagg.sh
 ```
 
 ### 9) GRPO training (ms-swift, all types)
