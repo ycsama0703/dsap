@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import re
+import time
 from copy import deepcopy
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
 import numpy as np
 import torch
@@ -27,6 +29,7 @@ from src.backends.hf_infer import (
 )
 
 PROFILE_CONTEXT_RE = re.compile(r"<profile_context>\s*(\{.*?\})\s*</profile_context>", re.DOTALL)
+LLM_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
 def parse_args() -> argparse.Namespace:
@@ -48,9 +51,17 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--max-new-tokens", type=int, default=128)
     ap.add_argument("--batch-size", type=int, default=4)
     ap.add_argument("--torch-dtype", type=str, default="bfloat16")
+    ap.add_argument("--profile-stats", type=str, default="data/grpo_profile_stats.csv")
     ap.add_argument("--out-dir", type=str, default=None)
     ap.add_argument("--write-profile-path", type=str, default=None,
                     help="If set, write best weights into this profile JSON (in-place update).")
+    ap.add_argument("--llm-guide", action="store_true", help="Use LLM to propose candidate weight sets.")
+    ap.add_argument("--llm-candidates", type=int, default=6)
+    ap.add_argument("--llm-model", type=str, default=None, help="LLM model name (default: DEEPSEEK_MODEL env or deepseek-chat).")
+    ap.add_argument("--llm-temperature", type=float, default=0.2)
+    ap.add_argument("--llm-max-tokens", type=int, default=512)
+    ap.add_argument("--llm-retries", type=int, default=2)
+    ap.add_argument("--llm-backoff", type=float, default=1.5)
     return ap.parse_args()
 
 
@@ -139,14 +150,14 @@ def value_reward(pred: float | None, y_true: float | None) -> float:
     return -abs(pred - y_true)
 
 
-def evaluate_profile(
+def evaluate_profile_scores(
     weights: Dict[str, float],
     eval_chats: List[List[Dict[str, str]]],
     eval_y: List[float],
     tokenizer,
     model,
     args: argparse.Namespace,
-) -> float:
+) -> List[float]:
     weighted_chats = build_weighted_chats(eval_chats, weights)
     best_scores = [None] * len(eval_y)
     for _ in range(args.k_reasoning):
@@ -163,7 +174,18 @@ def evaluate_profile(
             r = value_reward(pred, yt)
             if best_scores[i] is None or r > best_scores[i]:
                 best_scores[i] = r
-    scores = [s if s is not None else -1e9 for s in best_scores]
+    return [s if s is not None else -1e9 for s in best_scores]
+
+
+def evaluate_profile(
+    weights: Dict[str, float],
+    eval_chats: List[List[Dict[str, str]]],
+    eval_y: List[float],
+    tokenizer,
+    model,
+    args: argparse.Namespace,
+) -> float:
+    scores = evaluate_profile_scores(weights, eval_chats, eval_y, tokenizer, model, args)
     return float(np.mean(scores))
 
 
@@ -185,12 +207,13 @@ def evolve_population(
     return new_population[:pop_size]
 
 
-def maybe_save_outputs(out_dir: str, best_rewards: List[float], best_profiles: List[Dict[str, float]]) -> None:
+def maybe_save_outputs(out_dir: str, best_rewards: List[float], best_profiles: List[Dict[str, float]], llm_logs: List[dict]) -> None:
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
     payload = {
         "best_rewards": best_rewards,
         "best_profiles": best_profiles,
+        "llm_logs": llm_logs,
     }
     (out_path / "profile_evolution_results.json").write_text(
         json.dumps(payload, indent=2, ensure_ascii=True)
@@ -226,6 +249,117 @@ def maybe_save_outputs(out_dir: str, best_rewards: List[float], best_profiles: L
         print("[profile-evo] matplotlib not available, skip plots")
 
 
+def load_profile_stats(stats_path: Path) -> dict:
+    try:
+        import pandas as pd
+    except Exception:
+        return {}
+    if not stats_path.exists():
+        return {}
+    df = pd.read_csv(stats_path)
+    if df.empty or "type" not in df.columns:
+        return {}
+    df = df.set_index("type")
+    return df.to_dict(orient="index")
+
+
+def safe_std_from_var(v: Any) -> float:
+    try:
+        vv = float(v)
+        if not np.isfinite(vv) or vv <= 0:
+            return 0.0
+        return float(np.sqrt(vv))
+    except Exception:
+        return 0.0
+
+
+def build_llm_prompt(current_weights: Dict[str, float], eval_summary: dict, k: int) -> str:
+    return (
+        "Current objective_weights:\n"
+        f"{json.dumps(current_weights, ensure_ascii=True)}\n\n"
+        "Eval summary (GRPO-period holdout):\n"
+        f"- value_reward_mean: {eval_summary.get('value_reward_mean')}\n"
+        f"- value_reward_std: {eval_summary.get('value_reward_std')}\n"
+        f"- x_risk_mean/std: {eval_summary.get('x_risk_mean')}/{eval_summary.get('x_risk_std')}\n"
+        f"- x_herd_mean/std: {eval_summary.get('x_herd_mean')}/{eval_summary.get('x_herd_std')}\n"
+        f"- x_profit_mean/std: {eval_summary.get('x_profit_mean')}/{eval_summary.get('x_profit_std')}\n\n"
+        "Task:\n"
+        "1) Briefly summarize the likely failure mode (1-2 sentences max).\n"
+        "2) Provide 2-3 short evidence points supporting the adjustment direction.\n"
+        f"3) Generate {k} diverse candidate objective_weights.\n\n"
+        "Constraints:\n"
+        "- Only adjust risk_aversion, herd_behavior, profit_driven.\n"
+        "- Each candidate must be non-negative and sum to 1.\n"
+        "- Candidates should be diverse (avoid near-duplicates).\n"
+        "- Keep rationale concise (no chain-of-thought).\n\n"
+        "Return JSON schema:\n"
+        "{\n"
+        '  "diagnosis": "short failure mode (<=2 sentences)",\n'
+        '  "evidence": ["bullet 1", "bullet 2", "bullet 3 (optional)"],\n'
+        '  "candidates": [\n'
+        '    {"weights": {"risk_aversion": w1, "herd_behavior": w2, "profit_driven": w3}, "note": "short reason tag"}\n'
+        "  ]\n"
+        "}\n"
+    )
+
+
+def call_llm(prompt: str, args: argparse.Namespace) -> dict | None:
+    try:
+        from openai import OpenAI  # type: ignore
+    except Exception:
+        return None
+
+    api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None
+    model_name = args.llm_model or os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+    base_url = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com/v1")
+    client = OpenAI(api_key=api_key, base_url=base_url)
+
+    for attempt in range(args.llm_retries + 1):
+        try:
+            resp = client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": "You are a profile evolution controller. Output JSON only."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=args.llm_temperature,
+                max_tokens=args.llm_max_tokens,
+            )
+            content = (resp.choices[0].message.content or "").strip()
+            try:
+                return json.loads(content)
+            except Exception:
+                m = LLM_JSON_RE.search(content)
+                if m:
+                    return json.loads(m.group(0))
+        except Exception:
+            if attempt < args.llm_retries:
+                time.sleep(args.llm_backoff * (attempt + 1))
+                continue
+            return None
+    return None
+
+
+def normalize_candidate(weights: dict) -> Dict[str, float] | None:
+    if not isinstance(weights, dict):
+        return None
+    keys = ("risk_aversion", "herd_behavior", "profit_driven")
+    vals = {}
+    for k in keys:
+        if k not in weights:
+            return None
+        try:
+            vals[k] = float(weights[k])
+        except Exception:
+            return None
+    for k in keys:
+        if vals[k] < 0:
+            vals[k] = 0.0
+    return normalize_weights(vals)
+
+
 def main() -> None:
     args = parse_args()
 
@@ -254,9 +388,13 @@ def main() -> None:
     )
     model.eval()
 
+    stats_map = load_profile_stats(Path(args.profile_stats))
+    type_stats = stats_map.get(args.investor_type, {})
+
     population = init_population(seed_weights, n=args.population_size, sigma=0.03)
     best_rewards: List[float] = []
     best_profiles: List[Dict[str, float]] = []
+    llm_logs: List[dict] = []
 
     for gen in range(args.generations):
         fitness_map: Dict[int, float] = {}
@@ -265,13 +403,52 @@ def main() -> None:
 
         best_profile = max(population, key=lambda p: fitness_map[id(p)])
         best_reward = fitness_map[id(best_profile)]
+
+        llm_entry: dict = {"generation": gen}
+        candidates: List[Dict[str, float]] = []
+        if args.llm_guide:
+            best_scores = evaluate_profile_scores(best_profile, eval_chats, eval_y, tokenizer, model, args)
+            eval_summary = {
+                "value_reward_mean": float(np.mean(best_scores)),
+                "value_reward_std": float(np.std(best_scores)),
+                "x_risk_mean": type_stats.get("x_risk_mean"),
+                "x_risk_std": safe_std_from_var(type_stats.get("x_risk_var")),
+                "x_herd_mean": type_stats.get("x_herd_mean"),
+                "x_herd_std": safe_std_from_var(type_stats.get("x_herd_var")),
+                "x_profit_mean": type_stats.get("x_profit_mean"),
+                "x_profit_std": safe_std_from_var(type_stats.get("x_profit_var")),
+            }
+            prompt = build_llm_prompt(best_profile, eval_summary, args.llm_candidates)
+            resp = call_llm(prompt, args)
+            if resp:
+                llm_entry["diagnosis"] = resp.get("diagnosis")
+                llm_entry["evidence"] = resp.get("evidence")
+                raw_candidates = resp.get("candidates") or []
+                for c in raw_candidates:
+                    weights = normalize_candidate(c.get("weights") if isinstance(c, dict) else None)
+                    if weights:
+                        candidates.append(weights)
+                llm_entry["candidate_count"] = len(candidates)
+
+        if candidates:
+            for cand in candidates:
+                fitness_map[id(cand)] = evaluate_profile(cand, eval_chats, eval_y, tokenizer, model, args)
+            population_all = population + candidates
+        else:
+            population_all = population
+
+        best_profile = max(population_all, key=lambda p: fitness_map[id(p)])
+        best_reward = fitness_map[id(best_profile)]
         best_rewards.append(best_reward)
         best_profiles.append(deepcopy(best_profile))
+        llm_entry["best_reward"] = best_reward
+        llm_entry["best_profile"] = best_profile
+        llm_logs.append(llm_entry)
 
         print(f"[gen {gen}] best_reward={best_reward:.6f} best_weights={best_profile}")
 
         population = evolve_population(
-            population,
+            population_all,
             fitness_map,
             parents=args.parents,
             children_per_parent=args.children_per_parent,
@@ -280,7 +457,7 @@ def main() -> None:
         )
 
     if args.out_dir:
-        maybe_save_outputs(args.out_dir, best_rewards, best_profiles)
+        maybe_save_outputs(args.out_dir, best_rewards, best_profiles, llm_logs)
     if args.write_profile_path:
         out_path = Path(args.write_profile_path)
         data = json.loads(Path(args.profile_path).read_text(encoding="utf-8"))
