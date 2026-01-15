@@ -121,6 +121,113 @@ class ContractHoldingsORM(ORM):
         return rewards
 
 
+class ContractMSEZORM(ORM):
+    """Composite reward matching the paper-style structure.
+
+    R = lambda_r * I[contract] - lambda_q * MSE(q_hat, q) - lambda_z * MSE(z_hat, z)
+
+    Expected:
+      - q_hat in <answer> JSON as "holding_log_delta"
+      - optional z_hat in <answer> JSON as "z" (or "z_hat")
+      - q label from label_delta/holding_log_delta
+      - optional z label from label_z/z (if provided)
+    """
+
+    def __call__(
+        self,
+        completions,
+        label_delta=None,
+        holding_log_delta=None,
+        label_z=None,
+        z=None,
+        **kwargs,
+    ) -> List[float]:
+        lambda_r = float(kwargs.get("lambda_r", 1.0))
+        lambda_q = float(kwargs.get("lambda_q", 1.0))
+        lambda_z = float(kwargs.get("lambda_z", 1.0))
+        penalize_missing = bool(kwargs.get("penalize_missing", False))
+        missing_q_penalty = float(kwargs.get("missing_q_penalty", 1.0))
+        missing_z_penalty = float(kwargs.get("missing_z_penalty", 1.0))
+
+        if label_delta is None and holding_log_delta is not None:
+            label_delta = holding_log_delta
+        if label_delta is None and "holding_log_delta" in kwargs:
+            label_delta = kwargs.get("holding_log_delta")
+        if label_z is None:
+            label_z = z if z is not None else kwargs.get("label_z")
+
+        if not isinstance(label_delta, list):
+            label_delta = [label_delta] * len(completions)
+        if not isinstance(label_z, list):
+            label_z = [label_z] * len(completions)
+
+        rewards: List[float] = []
+        for comp, q_true, z_true in zip(completions, label_delta, label_z):
+            obj = _extract_json_from_answer(comp)
+            contract = 0.0
+            q_hat = None
+            z_hat = None
+            if isinstance(obj, dict):
+                if obj.get("holding_log_delta") is not None:
+                    try:
+                        q_hat = float(obj["holding_log_delta"])
+                        if math.isfinite(q_hat):
+                            contract = 1.0
+                        else:
+                            q_hat = None
+                    except Exception:
+                        q_hat = None
+                if obj.get("z") is not None:
+                    try:
+                        z_hat = float(obj["z"])
+                        if not math.isfinite(z_hat):
+                            z_hat = None
+                    except Exception:
+                        z_hat = None
+                if z_hat is None and obj.get("z_hat") is not None:
+                    try:
+                        z_hat = float(obj["z_hat"])
+                        if not math.isfinite(z_hat):
+                            z_hat = None
+                    except Exception:
+                        z_hat = None
+
+            mse_q = 0.0
+            if q_hat is None or q_true is None:
+                if penalize_missing:
+                    mse_q = missing_q_penalty
+            else:
+                try:
+                    qt = float(q_true)
+                    if math.isfinite(qt):
+                        mse_q = float((q_hat - qt) ** 2)
+                    elif penalize_missing:
+                        mse_q = missing_q_penalty
+                except Exception:
+                    if penalize_missing:
+                        mse_q = missing_q_penalty
+
+            mse_z = 0.0
+            if z_hat is None or z_true is None:
+                if penalize_missing:
+                    mse_z = missing_z_penalty
+            else:
+                try:
+                    zt = float(z_true)
+                    if math.isfinite(zt):
+                        mse_z = float((z_hat - zt) ** 2)
+                    elif penalize_missing:
+                        mse_z = missing_z_penalty
+                except Exception:
+                    if penalize_missing:
+                        mse_z = missing_z_penalty
+
+            reward = (lambda_r * contract) - (lambda_q * mse_q) - (lambda_z * mse_z)
+            rewards.append(float(reward))
+
+        return rewards
+
+
 class HoldingsDeltaORM(ORM):
     """Composite reward = w_mag * R_mag + w_dir * R_dir.
 
@@ -263,6 +370,7 @@ class HoldingsDeltaORM(ORM):
 # register names for --reward_funcs
 orms['external_holdings'] = HoldingsDeltaORM
 orms['contract_holdings'] = ContractHoldingsORM
+orms["contract_mse_z"] = ContractMSEZORM
 
 
 class DirectionHoldingsORM(ORM):
