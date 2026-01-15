@@ -284,9 +284,8 @@ def _build_neutral_profile_context() -> dict:
         },
         "summary": _NEUTRAL_PROFILE_SUMMARY,
     }
-    strength = _get_profile_strength(None, mode="neutral")
-    if strength:
-        ctx["profile_strength"] = strength
+    # SFT should stay fully neutral: keep strength null so it carries no signal.
+    ctx["profile_strength"] = None
     return ctx
 
 

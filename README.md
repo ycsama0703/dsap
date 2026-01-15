@@ -114,7 +114,8 @@ After this step, you **must** regenerate GRPO + TEST.
 ```bash
 BASE_MODEL=/path/to/Qwen2.5-7B-Instruct \
 SFT_OUT_ROOT=outputs \
-TEST_ROOT=artifacts/typeagg_all/test \
+EVAL_ROOT=artifacts/typeagg_all \
+EVAL_KIND=grpo \
 PROFILE_PATH=artifacts/features/type_profile_semantics.json \
 OUT_DIR_ROOT=outputs/profile_evo \
 bash scripts/evolve_profiles_typeagg.sh

@@ -5,7 +5,8 @@ set -euo pipefail
 
 BASE_MODEL="${BASE_MODEL:-/path/to/Qwen2.5-7B-Instruct}"
 SFT_OUT_ROOT="${SFT_OUT_ROOT:-outputs}"
-TEST_ROOT="${TEST_ROOT:-artifacts/typeagg_all/test}"
+EVAL_ROOT="${EVAL_ROOT:-artifacts/typeagg_all}"
+EVAL_KIND="${EVAL_KIND:-grpo}" # grpo or test
 PROFILE_PATH="${PROFILE_PATH:-artifacts/features/type_profile_semantics.json}"
 OUT_DIR_ROOT="${OUT_DIR_ROOT:-outputs/profile_evo}"
 
@@ -20,7 +21,11 @@ else
 fi
 
 for t in "${TYPE_LIST[@]}"; do
-  TEST_PATH="${TEST_ROOT}/test_${t}_all.jsonl"
+  if [[ "$EVAL_KIND" == "test" ]]; then
+    TEST_PATH="${EVAL_ROOT}/test/test_${t}_all.jsonl"
+  else
+    TEST_PATH="${EVAL_ROOT}/grpo/grpo_${t}.jsonl"
+  fi
   LORA_PATH="${SFT_OUT_ROOT}/sft_${t}"
   OUT_DIR="${OUT_DIR_ROOT}/${t}"
 
