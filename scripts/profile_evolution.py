@@ -73,6 +73,9 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--llm-max-tokens", type=int, default=512)
     ap.add_argument("--llm-retries", type=int, default=2)
     ap.add_argument("--llm-backoff", type=float, default=1.5)
+    ap.add_argument("--llm-sample-best", type=int, default=2, help="How many best (lowest error) samples to show LLM.")
+    ap.add_argument("--llm-sample-worst", type=int, default=2, help="How many worst (highest error) samples to show LLM.")
+    ap.add_argument("--llm-sample-max-chars", type=int, default=600, help="Max chars of raw output per sample.")
     ap.add_argument("--llm-only", action="store_true", help="Disable random mutation; evolve only via LLM candidates.")
     ap.add_argument("--progress", action="store_true", help="Show tqdm progress bars if available.")
     ap.set_defaults(progress=True)
@@ -342,6 +345,34 @@ def extract_profile_strength(user_text: str | None) -> Dict[str, Any]:
     return ps if isinstance(ps, dict) else {}
 
 
+def truncate_text(text: str | None, max_chars: int) -> str | None:
+    if text is None:
+        return None
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "..."
+
+
+def select_llm_examples(details: List[Dict[str, Any]], n_best: int, n_worst: int) -> Dict[str, List[Dict[str, Any]]]:
+    scored = [d for d in details if d.get("abs_error") is not None]
+    if not scored:
+        return {"worst": [], "best": []}
+    scored = sorted(scored, key=lambda d: d["abs_error"])
+    best = scored[: max(n_best, 0)]
+    worst = scored[-max(n_worst, 0) :] if n_worst > 0 else []
+    seen = set()
+    def _uniq(items):
+        out = []
+        for d in items:
+            key = (d.get("id"), d.get("permno"), d.get("date"))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(d)
+        return out
+    return {"worst": _uniq(worst), "best": _uniq(best)}
+
+
 def write_candidate_samples_csv(
     out_dir: str,
     gen: int,
@@ -496,7 +527,23 @@ def safe_std_from_var(v: Any) -> float:
         return 0.0
 
 
-def build_llm_prompt(current_weights: Dict[str, float], eval_summary: dict, k: int) -> str:
+def build_llm_prompt(current_weights: Dict[str, float], eval_summary: dict, k: int, examples: dict | None = None) -> str:
+    examples = examples or {}
+    def _fmt(items: List[Dict[str, Any]]) -> str:
+        if not items:
+            return "[]"
+        payload = []
+        for d in items:
+            raw_out = d.get("completion")
+            payload.append(
+                {
+                    "y_true": d.get("y_true"),
+                    "pred": d.get("pred"),
+                    "reason": extract_think(raw_out),
+                }
+            )
+        return json.dumps(payload, ensure_ascii=True)
+
     return (
         "Current objective_weights:\n"
         f"{json.dumps(current_weights, ensure_ascii=True)}\n\n"
@@ -506,6 +553,9 @@ def build_llm_prompt(current_weights: Dict[str, float], eval_summary: dict, k: i
         f"- x_risk_mean/std: {eval_summary.get('x_risk_mean')}/{eval_summary.get('x_risk_std')}\n"
         f"- x_herd_mean/std: {eval_summary.get('x_herd_mean')}/{eval_summary.get('x_herd_std')}\n"
         f"- x_profit_mean/std: {eval_summary.get('x_profit_mean')}/{eval_summary.get('x_profit_std')}\n\n"
+        "Representative samples (worst/best):\n"
+        f"- worst_samples: {_fmt(examples.get('worst', []))}\n"
+        f"- best_samples: {_fmt(examples.get('best', []))}\n\n"
         "Task:\n"
         "1) Briefly summarize the likely failure mode in terms of objective_weights being too high/low\n"
         "   (1-2 sentences max, must mention risk_aversion/herd_behavior/profit_driven explicitly).\n"
@@ -688,7 +738,7 @@ def main() -> None:
         candidates: List[Dict[str, float]] = []
         if args.llm_guide:
             print(f"[gen {gen}] llm propose -> {args.llm_candidates} candidates")
-            best_scores, _ = evaluate_profile_scores(
+            best_scores, best_details = evaluate_profile_scores(
                 best_profile,
                 eval_chats,
                 eval_y,
@@ -709,7 +759,12 @@ def main() -> None:
                 "x_profit_mean": type_stats.get("x_profit_mean"),
                 "x_profit_std": safe_std_from_var(type_stats.get("x_profit_var")),
             }
-            prompt = build_llm_prompt(best_profile, eval_summary, args.llm_candidates)
+            trimmed = []
+            for d in best_details:
+                raw_out = truncate_text(d.get("completion"), args.llm_sample_max_chars)
+                trimmed.append({**d, "completion": raw_out})
+            examples = select_llm_examples(trimmed, args.llm_sample_best, args.llm_sample_worst)
+            prompt = build_llm_prompt(best_profile, eval_summary, args.llm_candidates, examples=examples)
             resp = call_llm(prompt, args)
             if resp:
                 llm_entry["llm_prompt"] = prompt
