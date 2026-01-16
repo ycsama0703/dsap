@@ -50,7 +50,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--investor-type", type=str, default="banks")
     ap.add_argument("--base-model", type=str, default="Qwen/Qwen2.5-7B-Instruct")
     ap.add_argument("--lora-path", type=str, default=None)
-    ap.add_argument("--eval-size", type=int, default=80)
+    ap.add_argument("--eval-size", type=int, default=5)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--population-size", type=int, default=8)
     ap.add_argument("--parents", type=int, default=2)
@@ -73,6 +73,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--llm-max-tokens", type=int, default=512)
     ap.add_argument("--llm-retries", type=int, default=2)
     ap.add_argument("--llm-backoff", type=float, default=1.5)
+    ap.add_argument("--llm-only", action="store_true", help="Disable random mutation; evolve only via LLM candidates.")
     ap.add_argument("--progress", action="store_true", help="Show tqdm progress bars if available.")
     ap.set_defaults(progress=True)
     return ap.parse_args()
@@ -506,9 +507,10 @@ def build_llm_prompt(current_weights: Dict[str, float], eval_summary: dict, k: i
         f"- x_herd_mean/std: {eval_summary.get('x_herd_mean')}/{eval_summary.get('x_herd_std')}\n"
         f"- x_profit_mean/std: {eval_summary.get('x_profit_mean')}/{eval_summary.get('x_profit_std')}\n\n"
         "Task:\n"
-        "1) Briefly summarize the likely failure mode (1-2 sentences max).\n"
-        "2) Provide 2-3 short evidence points supporting the adjustment direction.\n"
-        f"3) Generate {k} diverse candidate objective_weights.\n\n"
+        "1) Briefly summarize the likely failure mode in terms of objective_weights being too high/low\n"
+        "   (1-2 sentences max, must mention risk_aversion/herd_behavior/profit_driven explicitly).\n"
+        "2) Provide 2-3 short evidence points supporting how those weight shifts reduce prediction bias.\n"
+        f"3) Generate {k} diverse candidate objective_weights consistent with that diagnosis.\n\n"
         "Constraints:\n"
         "- Only adjust risk_aversion, herd_behavior, profit_driven.\n"
         "- Each candidate must be non-negative and sum to 1.\n"
@@ -647,7 +649,10 @@ def main() -> None:
     stats_map = load_profile_stats(Path(args.profile_stats))
     type_stats = stats_map.get(args.investor_type, {})
 
-    population = init_population(seed_weights, n=args.population_size, sigma=0.03)
+    if args.llm_only:
+        population = [deepcopy(seed_weights) for _ in range(args.population_size)]
+    else:
+        population = init_population(seed_weights, n=args.population_size, sigma=0.03)
     best_rewards: List[float] = []
     best_profiles: List[Dict[str, float]] = []
     llm_logs: List[dict] = []
@@ -754,14 +759,19 @@ def main() -> None:
             append_progress(args.out_dir, llm_entry)
         print("=" * 60)
 
-        population = evolve_population(
-            population_all,
-            fitness_map,
-            parents=args.parents,
-            children_per_parent=args.children_per_parent,
-            mutation_sigma=args.mutation_sigma,
-            pop_size=args.population_size,
-        )
+        if args.llm_only:
+            population = sorted(
+                population_all, key=lambda p: fitness_map[id(p)], reverse=True
+            )[: args.population_size]
+        else:
+            population = evolve_population(
+                population_all,
+                fitness_map,
+                parents=args.parents,
+                children_per_parent=args.children_per_parent,
+                mutation_sigma=args.mutation_sigma,
+                pop_size=args.population_size,
+            )
 
     if args.out_dir:
         maybe_save_outputs(args.out_dir, best_rewards, best_profiles, llm_logs)
