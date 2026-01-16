@@ -9,6 +9,7 @@ Minimal profile evolution experiment:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import random
@@ -16,7 +17,7 @@ import re
 import time
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import torch
@@ -30,6 +31,8 @@ from src.backends.hf_infer import (
 
 PROFILE_CONTEXT_RE = re.compile(r"<profile_context>\s*(\{.*?\})\s*</profile_context>", re.DOTALL)
 LLM_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+THINK_RE = re.compile(r"<think>\s*(.*?)\s*</think>", re.DOTALL | re.IGNORECASE)
+ANSWER_RE = re.compile(r"<answer>\s*(.*?)\s*</answer>", re.DOTALL | re.IGNORECASE)
 
 
 def maybe_tqdm(iterable, total=None, desc: str = ""):
@@ -174,9 +177,14 @@ def evaluate_profile_scores(
     model,
     args: argparse.Namespace,
     progress_tag: str = "",
-) -> List[float]:
+    eval_meta: List[Dict[str, Any]] | None = None,
+    return_details: bool = False,
+) -> List[float] | Tuple[List[float], List[Dict[str, Any]]]:
     weighted_chats = build_weighted_chats(eval_chats, weights)
     best_scores = [None] * len(eval_y)
+    best_preds: List[float | None] = [None] * len(eval_y)
+    best_completions: List[str | None] = [None] * len(eval_y)
+    best_k: List[int | None] = [None] * len(eval_y)
     for k_idx in range(args.k_reasoning):
         completions = infer_in_batches(
             tokenizer,
@@ -193,7 +201,30 @@ def evaluate_profile_scores(
             r = value_reward(pred, yt)
             if best_scores[i] is None or r > best_scores[i]:
                 best_scores[i] = r
-    return [s if s is not None else -1e9 for s in best_scores]
+                best_preds[i] = pred
+                best_completions[i] = completions[i]
+                best_k[i] = k_idx + 1
+    scores = [s if s is not None else -1e9 for s in best_scores]
+    if not return_details:
+        return scores
+    details: List[Dict[str, Any]] = []
+    for i, score in enumerate(scores):
+        meta = eval_meta[i] if eval_meta is not None else {}
+        pred = best_preds[i]
+        yt = eval_y[i]
+        abs_err = None if pred is None or yt is None else abs(pred - yt)
+        details.append(
+            {
+                **meta,
+                "y_true": yt,
+                "pred": pred,
+                "abs_error": abs_err,
+                "reward": score,
+                "best_k": best_k[i],
+                "completion": best_completions[i],
+            }
+        )
+    return scores, details
 
 
 def evaluate_profile(
@@ -276,6 +307,148 @@ def append_progress(out_dir: str, record: dict) -> None:
         f.write(json.dumps(record, ensure_ascii=True) + "\n")
 
 
+def extract_think(text: str | None) -> str | None:
+    if not text:
+        return None
+    m = THINK_RE.search(text)
+    if not m:
+        return None
+    content = m.group(1).strip()
+    return content or None
+
+
+def extract_answer(text: str | None) -> str | None:
+    if not text:
+        return None
+    m = ANSWER_RE.search(text)
+    if not m:
+        return None
+    content = m.group(1).strip()
+    return content or None
+
+
+def extract_profile_strength(user_text: str | None) -> Dict[str, Any]:
+    if not user_text:
+        return {}
+    m = PROFILE_CONTEXT_RE.search(user_text)
+    if not m:
+        return {}
+    try:
+        obj = json.loads(m.group(1))
+    except Exception:
+        return {}
+    ps = obj.get("profile_strength")
+    return ps if isinstance(ps, dict) else {}
+
+
+def write_candidate_samples_csv(
+    out_dir: str,
+    gen: int,
+    stage: str,
+    candidate_idx: int,
+    weights: Dict[str, float],
+    details: List[Dict[str, Any]],
+) -> None:
+    debug_dir = Path(out_dir) / "debug" / f"gen_{gen}"
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    out_path = debug_dir / f"{stage}_samples.csv"
+    write_header = not out_path.exists()
+    fieldnames = [
+        "generation",
+        "stage",
+        "candidate_idx",
+        "risk_aversion",
+        "herd_behavior",
+        "profit_driven",
+        "ticker",
+        "company",
+        "id",
+        "quarter",
+        "date",
+        "permno",
+        "holding_t",
+        "y_true",
+        "pred",
+        "abs_error",
+        "reward",
+        "best_k",
+        "profile_strength_mode",
+        "x_risk_mean",
+        "x_herd_mean",
+        "x_profit_mean",
+        "overall_mean",
+        "raw_output",
+        "reason",
+        "answer_body",
+    ]
+    with out_path.open("a", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if write_header:
+            writer.writeheader()
+        for d in details:
+            completion = d.get("completion")
+            writer.writerow(
+                {
+                    "generation": gen,
+                    "stage": stage,
+                    "candidate_idx": candidate_idx,
+                    "risk_aversion": weights.get("risk_aversion"),
+                    "herd_behavior": weights.get("herd_behavior"),
+                    "profit_driven": weights.get("profit_driven"),
+                    "ticker": d.get("ticker"),
+                    "company": d.get("company"),
+                    "id": d.get("id"),
+                    "quarter": d.get("quarter"),
+                    "date": d.get("date"),
+                    "permno": d.get("permno"),
+                    "holding_t": d.get("holding_t"),
+                    "y_true": d.get("y_true"),
+                    "pred": d.get("pred"),
+                    "abs_error": d.get("abs_error"),
+                    "reward": d.get("reward"),
+                    "best_k": d.get("best_k"),
+                    "profile_strength_mode": d.get("profile_strength_mode"),
+                    "x_risk_mean": d.get("x_risk_mean"),
+                    "x_herd_mean": d.get("x_herd_mean"),
+                    "x_profit_mean": d.get("x_profit_mean"),
+                    "overall_mean": d.get("overall_mean"),
+                    "raw_output": completion,
+                    "reason": extract_think(completion),
+                    "answer_body": extract_answer(completion),
+                }
+            )
+
+
+def write_candidate_debug(
+    out_dir: str,
+    gen: int,
+    stage: str,
+    candidate_idx: int,
+    weights: Dict[str, float],
+    scores: List[float],
+    details: List[Dict[str, Any]],
+    note: str | None = None,
+) -> None:
+    debug_dir = Path(out_dir) / "debug" / f"gen_{gen}"
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    out_path = debug_dir / f"{stage}.jsonl"
+    valid_abs = [d.get("abs_error") for d in details if d.get("abs_error") is not None]
+    record = {
+        "generation": gen,
+        "stage": stage,
+        "candidate_idx": candidate_idx,
+        "weights": weights,
+        "mean_reward": float(np.mean(scores)) if scores else None,
+        "std_reward": float(np.std(scores)) if scores else None,
+        "mean_abs_error": float(np.mean(valid_abs)) if valid_abs else None,
+        "note": note,
+        "details": details,
+    }
+    with out_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=True) + "\n")
+    write_candidate_samples_csv(out_dir, gen, stage, candidate_idx, weights, details)
+
+
 def load_profile_stats(stats_path: Path) -> dict:
     try:
         import pandas as pd
@@ -288,6 +461,28 @@ def load_profile_stats(stats_path: Path) -> dict:
         return {}
     df = df.set_index("type")
     return df.to_dict(orient="index")
+
+
+def load_permno_mapping(path: Path) -> Dict[int, Dict[str, str]]:
+    try:
+        import pandas as pd
+    except Exception:
+        return {}
+    if not path.exists():
+        return {}
+    df = pd.read_csv(path)
+    if df.empty or "PERMNO" not in df.columns:
+        return {}
+    df = df.dropna(subset=["PERMNO"])
+    df["PERMNO"] = df["PERMNO"].astype(int)
+    df = df.sort_values(by="PERMNO").drop_duplicates(subset=["PERMNO"], keep="last")
+    mapping: Dict[int, Dict[str, str]] = {}
+    for _, row in df.iterrows():
+        mapping[int(row["PERMNO"])] = {
+            "ticker": str(row["TICKER"]) if "TICKER" in row and not isinstance(row["TICKER"], float) else "",
+            "company": str(row["COMNAM"]) if "COMNAM" in row and not isinstance(row["COMNAM"], float) else "",
+        }
+    return mapping
 
 
 def safe_std_from_var(v: Any) -> float:
@@ -356,11 +551,17 @@ def call_llm(prompt: str, args: argparse.Namespace) -> dict | None:
             )
             content = (resp.choices[0].message.content or "").strip()
             try:
-                return json.loads(content)
+                parsed = json.loads(content)
+                if isinstance(parsed, dict) and "_raw" not in parsed:
+                    parsed["_raw"] = content
+                return parsed
             except Exception:
                 m = LLM_JSON_RE.search(content)
                 if m:
-                    return json.loads(m.group(0))
+                    parsed = json.loads(m.group(0))
+                    if isinstance(parsed, dict) and "_raw" not in parsed:
+                        parsed["_raw"] = content
+                    return parsed
         except Exception:
             if attempt < args.llm_retries:
                 time.sleep(args.llm_backoff * (attempt + 1))
@@ -408,7 +609,7 @@ def main() -> None:
         raise ValueError(f"investor_type not found in profile file: {args.investor_type}")
     seed_weights = normalize_weights(dict(seed_profile["objective_weights"]))
 
-    chats, y_true, _, _, _, _, _ = build_eval_inputs(args.test_path)
+    chats, y_true, quarters, ids, holding_ts, permnos, dates = build_eval_inputs(args.test_path)
     if not chats:
         raise RuntimeError("no eval samples found in test set")
     indices = list(range(len(chats)))
@@ -417,6 +618,26 @@ def main() -> None:
     indices = indices[:eval_n]
     eval_chats = [chats[i] for i in indices]
     eval_y = [y_true[i] for i in indices]
+    permno_map = load_permno_mapping(Path("data/ticker_mapping.csv"))
+    eval_meta = []
+    for j, i in enumerate(indices):
+        ps = extract_profile_strength(eval_chats[j][1]["content"])
+        eval_meta.append(
+            {
+                "id": ids[i],
+                "quarter": quarters[i],
+                "permno": permnos[i],
+                "date": dates[i],
+                "holding_t": holding_ts[i],
+                "ticker": permno_map.get(permnos[i] or -1, {}).get("ticker"),
+                "company": permno_map.get(permnos[i] or -1, {}).get("company"),
+                "profile_strength_mode": ps.get("mode"),
+                "x_risk_mean": ps.get("x_risk_mean"),
+                "x_herd_mean": ps.get("x_herd_mean"),
+                "x_profit_mean": ps.get("x_profit_mean"),
+                "overall_mean": ps.get("overall_mean"),
+            }
+        )
 
     tokenizer, model = load_model_and_tokenizer(
         args.base_model, args.lora_path, torch_dtype=args.torch_dtype
@@ -436,11 +657,24 @@ def main() -> None:
         print(f"[gen {gen}] start  (pop={args.population_size}, eval={args.eval_size}, k={args.k_reasoning})")
         print("-" * 60)
         fitness_map: Dict[int, float] = {}
-        pop_iter = population
+        pop_iter = list(enumerate(population))
         if args.progress:
-            pop_iter = maybe_tqdm(population, total=len(population), desc=f"gen {gen} pop_eval")
-        for p in pop_iter:
-            fitness_map[id(p)] = evaluate_profile(p, eval_chats, eval_y, tokenizer, model, args)
+            pop_iter = maybe_tqdm(pop_iter, total=len(population), desc=f"gen {gen} pop_eval")
+        for idx, p in pop_iter:
+            scores, details = evaluate_profile_scores(
+                p,
+                eval_chats,
+                eval_y,
+                tokenizer,
+                model,
+                args,
+                progress_tag=f"gen {gen} pop {idx+1}/{len(population)}",
+                eval_meta=eval_meta,
+                return_details=True,
+            )
+            fitness_map[id(p)] = float(np.mean(scores))
+            if args.out_dir:
+                write_candidate_debug(args.out_dir, gen, "population", idx, p, scores, details)
 
         best_profile = max(population, key=lambda p: fitness_map[id(p)])
         best_reward = fitness_map[id(best_profile)]
@@ -449,7 +683,7 @@ def main() -> None:
         candidates: List[Dict[str, float]] = []
         if args.llm_guide:
             print(f"[gen {gen}] llm propose -> {args.llm_candidates} candidates")
-            best_scores = evaluate_profile_scores(
+            best_scores, _ = evaluate_profile_scores(
                 best_profile,
                 eval_chats,
                 eval_y,
@@ -457,6 +691,8 @@ def main() -> None:
                 model,
                 args,
                 progress_tag=f"gen {gen} best",
+                eval_meta=eval_meta,
+                return_details=True,
             )
             eval_summary = {
                 "value_reward_mean": float(np.mean(best_scores)),
@@ -471,6 +707,8 @@ def main() -> None:
             prompt = build_llm_prompt(best_profile, eval_summary, args.llm_candidates)
             resp = call_llm(prompt, args)
             if resp:
+                llm_entry["llm_prompt"] = prompt
+                llm_entry["llm_raw"] = resp.get("_raw")
                 llm_entry["diagnosis"] = resp.get("diagnosis")
                 llm_entry["evidence"] = resp.get("evidence")
                 raw_candidates = resp.get("candidates") or []
@@ -481,18 +719,24 @@ def main() -> None:
                 llm_entry["candidate_count"] = len(candidates)
 
         if candidates:
-            cand_iter = candidates
+            cand_iter = list(enumerate(candidates))
             if args.progress:
-                cand_iter = maybe_tqdm(candidates, total=len(candidates), desc=f"gen {gen} cand_eval")
-            for cand in cand_iter:
-                fitness_map[id(cand)] = evaluate_profile(
+                cand_iter = maybe_tqdm(cand_iter, total=len(candidates), desc=f"gen {gen} cand_eval")
+            for idx, cand in cand_iter:
+                scores, details = evaluate_profile_scores(
                     cand,
                     eval_chats,
                     eval_y,
                     tokenizer,
                     model,
                     args,
+                    progress_tag=f"gen {gen} cand {idx+1}/{len(candidates)}",
+                    eval_meta=eval_meta,
+                    return_details=True,
                 )
+                fitness_map[id(cand)] = float(np.mean(scores))
+                if args.out_dir:
+                    write_candidate_debug(args.out_dir, gen, "llm_candidates", idx, cand, scores, details)
             population_all = population + candidates
         else:
             population_all = population
