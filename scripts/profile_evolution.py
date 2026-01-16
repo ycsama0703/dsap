@@ -24,7 +24,6 @@ import torch
 
 from src.backends.hf_infer import (
     build_eval_inputs,
-    extract_pred,
     infer_chat_batch,
     load_model_and_tokenizer,
 )
@@ -167,9 +166,7 @@ def infer_in_batches(
     return outputs
 
 
-def value_reward(pred: float | None, y_true: float | None) -> float:
-    if pred is None or y_true is None:
-        return -1e9
+def value_reward(pred: float, y_true: float) -> float:
     return -abs(pred - y_true)
 
 
@@ -200,32 +197,36 @@ def evaluate_profile_scores(
             progress=args.progress,
             desc=f"{progress_tag} k{k_idx+1}/{args.k_reasoning}",
         )
-        preds = [extract_pred(c) for c in completions]
+        preds = [strict_extract_pred(c) for c in completions]
         for i, (pred, yt) in enumerate(zip(preds, eval_y)):
+            if pred is None or yt is None:
+                continue
             r = value_reward(pred, yt)
             if best_scores[i] is None or r > best_scores[i]:
                 best_scores[i] = r
                 best_preds[i] = pred
                 best_completions[i] = completions[i]
                 best_k[i] = k_idx + 1
-    scores = [s if s is not None else -1e9 for s in best_scores]
+    scores = [s for s in best_scores if s is not None]
     if not return_details:
         return scores
     details: List[Dict[str, Any]] = []
-    for i, score in enumerate(scores):
+    for i, score in enumerate(best_scores):
         meta = eval_meta[i] if eval_meta is not None else {}
         pred = best_preds[i]
         yt = eval_y[i]
-        abs_err = None if pred is None or yt is None else abs(pred - yt)
+        valid = pred is not None and yt is not None and score is not None
+        abs_err = None if not valid else abs(pred - yt)
         details.append(
             {
                 **meta,
                 "y_true": yt,
                 "pred": pred,
                 "abs_error": abs_err,
-                "reward": score,
+                "reward": score if valid else None,
                 "best_k": best_k[i],
                 "completion": best_completions[i],
+                "valid": valid,
             }
         )
     return scores, details
@@ -240,7 +241,7 @@ def evaluate_profile(
     args: argparse.Namespace,
 ) -> float:
     scores = evaluate_profile_scores(weights, eval_chats, eval_y, tokenizer, model, args)
-    return float(np.mean(scores))
+    return float(np.mean(scores)) if scores else -1e9
 
 
 def evolve_population(
@@ -331,6 +332,30 @@ def extract_answer(text: str | None) -> str | None:
     return content or None
 
 
+def strict_extract_pred(text: str | None) -> float | None:
+    if not text:
+        return None
+    m = ANSWER_RE.search(text)
+    if not m:
+        return None
+    content = m.group(1).strip()
+    try:
+        obj = json.loads(content)
+    except Exception:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    if obj.get("holding_log_delta") is None:
+        return None
+    try:
+        val = float(obj["holding_log_delta"])
+    except Exception:
+        return None
+    if not np.isfinite(val) or not (-10 < val < 10):
+        return None
+    return val
+
+
 def extract_profile_strength(user_text: str | None) -> Dict[str, Any]:
     if not user_text:
         return {}
@@ -373,6 +398,10 @@ def select_llm_examples(details: List[Dict[str, Any]], n_best: int, n_worst: int
     return {"worst": _uniq(worst), "best": _uniq(best)}
 
 
+def count_valid_details(details: List[Dict[str, Any]]) -> int:
+    return sum(1 for d in details if d.get("valid"))
+
+
 def write_candidate_samples_csv(
     out_dir: str,
     gen: int,
@@ -403,6 +432,7 @@ def write_candidate_samples_csv(
         "pred",
         "abs_error",
         "reward",
+        "valid",
         "best_k",
         "profile_strength_mode",
         "x_risk_mean",
@@ -438,6 +468,7 @@ def write_candidate_samples_csv(
                     "pred": d.get("pred"),
                     "abs_error": d.get("abs_error"),
                     "reward": d.get("reward"),
+                    "valid": d.get("valid"),
                     "best_k": d.get("best_k"),
                     "profile_strength_mode": d.get("profile_strength_mode"),
                     "x_risk_mean": d.get("x_risk_mean"),
@@ -465,6 +496,7 @@ def write_candidate_debug(
     debug_dir.mkdir(parents=True, exist_ok=True)
     out_path = debug_dir / f"{stage}.jsonl"
     valid_abs = [d.get("abs_error") for d in details if d.get("abs_error") is not None]
+    valid_count = sum(1 for d in details if d.get("valid"))
     record = {
         "generation": gen,
         "stage": stage,
@@ -473,6 +505,8 @@ def write_candidate_debug(
         "mean_reward": float(np.mean(scores)) if scores else None,
         "std_reward": float(np.std(scores)) if scores else None,
         "mean_abs_error": float(np.mean(valid_abs)) if valid_abs else None,
+        "valid_samples": valid_count,
+        "invalid_samples": len(details) - valid_count,
         "note": note,
         "details": details,
     }
@@ -712,6 +746,8 @@ def main() -> None:
         print(f"[gen {gen}] start  (pop={args.population_size}, eval={args.eval_size}, k={args.k_reasoning})")
         print("-" * 60)
         fitness_map: Dict[int, float] = {}
+        pop_valid_counts: List[int] = []
+        pop_total_counts: List[int] = []
         pop_iter = list(enumerate(population))
         if args.progress:
             pop_iter = maybe_tqdm(pop_iter, total=len(population), desc=f"gen {gen} pop_eval")
@@ -727,9 +763,21 @@ def main() -> None:
                 eval_meta=eval_meta,
                 return_details=True,
             )
-            fitness_map[id(p)] = float(np.mean(scores))
+            fitness_map[id(p)] = float(np.mean(scores)) if scores else -1e9
+            pop_valid_counts.append(count_valid_details(details))
+            pop_total_counts.append(len(details))
             if args.out_dir:
                 write_candidate_debug(args.out_dir, gen, "population", idx, p, scores, details)
+
+        if pop_valid_counts:
+            mean_valid = float(np.mean(pop_valid_counts))
+            min_valid = min(pop_valid_counts)
+            max_valid = max(pop_valid_counts)
+            mean_total = float(np.mean(pop_total_counts))
+            print(
+                f"[gen {gen}] population valid_mean={mean_valid:.2f} "
+                f"min={min_valid} max={max_valid} total_mean={mean_total:.2f}"
+            )
 
         best_profile = max(population, key=lambda p: fitness_map[id(p)])
         best_reward = fitness_map[id(best_profile)]
@@ -750,8 +798,8 @@ def main() -> None:
                 return_details=True,
             )
             eval_summary = {
-                "value_reward_mean": float(np.mean(best_scores)),
-                "value_reward_std": float(np.std(best_scores)),
+                "value_reward_mean": float(np.mean(best_scores)) if best_scores else None,
+                "value_reward_std": float(np.std(best_scores)) if best_scores else None,
                 "x_risk_mean": type_stats.get("x_risk_mean"),
                 "x_risk_std": safe_std_from_var(type_stats.get("x_risk_var")),
                 "x_herd_mean": type_stats.get("x_herd_mean"),
@@ -779,6 +827,8 @@ def main() -> None:
                 llm_entry["candidate_count"] = len(candidates)
 
         if candidates:
+            cand_valid_counts: List[int] = []
+            cand_total_counts: List[int] = []
             cand_iter = list(enumerate(candidates))
             if args.progress:
                 cand_iter = maybe_tqdm(cand_iter, total=len(candidates), desc=f"gen {gen} cand_eval")
@@ -794,10 +844,21 @@ def main() -> None:
                     eval_meta=eval_meta,
                     return_details=True,
                 )
-                fitness_map[id(cand)] = float(np.mean(scores))
+                fitness_map[id(cand)] = float(np.mean(scores)) if scores else -1e9
+                cand_valid_counts.append(count_valid_details(details))
+                cand_total_counts.append(len(details))
                 if args.out_dir:
                     write_candidate_debug(args.out_dir, gen, "llm_candidates", idx, cand, scores, details)
             population_all = population + candidates
+            if cand_valid_counts:
+                mean_valid = float(np.mean(cand_valid_counts))
+                min_valid = min(cand_valid_counts)
+                max_valid = max(cand_valid_counts)
+                mean_total = float(np.mean(cand_total_counts))
+                print(
+                    f"[gen {gen}] llm_candidates valid_mean={mean_valid:.2f} "
+                    f"min={min_valid} max={max_valid} total_mean={mean_total:.2f}"
+                )
         else:
             population_all = population
 
