@@ -32,6 +32,14 @@ PROFILE_CONTEXT_RE = re.compile(r"<profile_context>\s*(\{.*?\})\s*</profile_cont
 LLM_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
+def maybe_tqdm(iterable, total=None, desc: str = ""):
+    try:
+        from tqdm import tqdm  # type: ignore
+    except Exception:
+        return iterable
+    return tqdm(iterable, total=total, desc=desc)
+
+
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Minimal profile evolution (objective_weights only).")
     ap.add_argument("--test-path", type=str, required=True)
@@ -62,6 +70,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--llm-max-tokens", type=int, default=512)
     ap.add_argument("--llm-retries", type=int, default=2)
     ap.add_argument("--llm-backoff", type=float, default=1.5)
+    ap.add_argument("--progress", action="store_true", help="Show tqdm progress bars if available.")
+    ap.set_defaults(progress=True)
     return ap.parse_args()
 
 
@@ -398,7 +408,10 @@ def main() -> None:
 
     for gen in range(args.generations):
         fitness_map: Dict[int, float] = {}
-        for p in population:
+        pop_iter = population
+        if args.progress:
+            pop_iter = maybe_tqdm(population, total=len(population), desc=f"gen {gen} eval")
+        for p in pop_iter:
             fitness_map[id(p)] = evaluate_profile(p, eval_chats, eval_y, tokenizer, model, args)
 
         best_profile = max(population, key=lambda p: fitness_map[id(p)])
@@ -431,7 +444,10 @@ def main() -> None:
                 llm_entry["candidate_count"] = len(candidates)
 
         if candidates:
-            for cand in candidates:
+            cand_iter = candidates
+            if args.progress:
+                cand_iter = maybe_tqdm(candidates, total=len(candidates), desc=f"gen {gen} cand_eval")
+            for cand in cand_iter:
                 fitness_map[id(cand)] = evaluate_profile(cand, eval_chats, eval_y, tokenizer, model, args)
             population_all = population + candidates
         else:
