@@ -136,10 +136,16 @@ def infer_in_batches(
     batch_size: int,
     temperature: float,
     max_new_tokens: int,
+    progress: bool = False,
+    desc: str = "infer",
 ) -> List[str]:
     outputs: List[str] = []
     indices = list(range(len(chats)))
-    for batch in chunked(indices, batch_size):
+    batches = list(chunked(indices, batch_size))
+    iterator = batches
+    if progress:
+        iterator = maybe_tqdm(batches, total=len(batches), desc=desc)
+    for batch in iterator:
         batch_msgs = [chats[i] for i in batch]
         outputs.extend(
             infer_chat_batch(
@@ -167,10 +173,11 @@ def evaluate_profile_scores(
     tokenizer,
     model,
     args: argparse.Namespace,
+    progress_tag: str = "",
 ) -> List[float]:
     weighted_chats = build_weighted_chats(eval_chats, weights)
     best_scores = [None] * len(eval_y)
-    for _ in range(args.k_reasoning):
+    for k_idx in range(args.k_reasoning):
         completions = infer_in_batches(
             tokenizer,
             model,
@@ -178,6 +185,8 @@ def evaluate_profile_scores(
             batch_size=args.batch_size,
             temperature=args.temperature,
             max_new_tokens=args.max_new_tokens,
+            progress=args.progress,
+            desc=f"{progress_tag} k{k_idx+1}/{args.k_reasoning}",
         )
         preds = [extract_pred(c) for c in completions]
         for i, (pred, yt) in enumerate(zip(preds, eval_y)):
@@ -257,6 +266,14 @@ def maybe_save_outputs(out_dir: str, best_rewards: List[float], best_profiles: L
         plt.close()
     except Exception:
         print("[profile-evo] matplotlib not available, skip plots")
+
+
+def append_progress(out_dir: str, record: dict) -> None:
+    out_path = Path(out_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    prog_path = out_path / "progress.jsonl"
+    with prog_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=True) + "\n")
 
 
 def load_profile_stats(stats_path: Path) -> dict:
@@ -420,7 +437,15 @@ def main() -> None:
         llm_entry: dict = {"generation": gen}
         candidates: List[Dict[str, float]] = []
         if args.llm_guide:
-            best_scores = evaluate_profile_scores(best_profile, eval_chats, eval_y, tokenizer, model, args)
+            best_scores = evaluate_profile_scores(
+                best_profile,
+                eval_chats,
+                eval_y,
+                tokenizer,
+                model,
+                args,
+                progress_tag=f"gen {gen} best",
+            )
             eval_summary = {
                 "value_reward_mean": float(np.mean(best_scores)),
                 "value_reward_std": float(np.std(best_scores)),
@@ -448,7 +473,14 @@ def main() -> None:
             if args.progress:
                 cand_iter = maybe_tqdm(candidates, total=len(candidates), desc=f"gen {gen} cand_eval")
             for cand in cand_iter:
-                fitness_map[id(cand)] = evaluate_profile(cand, eval_chats, eval_y, tokenizer, model, args)
+                fitness_map[id(cand)] = evaluate_profile(
+                    cand,
+                    eval_chats,
+                    eval_y,
+                    tokenizer,
+                    model,
+                    args,
+                )
             population_all = population + candidates
         else:
             population_all = population
@@ -462,6 +494,8 @@ def main() -> None:
         llm_logs.append(llm_entry)
 
         print(f"[gen {gen}] best_reward={best_reward:.6f} best_weights={best_profile}")
+        if args.out_dir:
+            append_progress(args.out_dir, llm_entry)
 
         population = evolve_population(
             population_all,
