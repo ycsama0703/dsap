@@ -394,6 +394,14 @@ def main() -> None:
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
+    banner = "=" * 72
+    print(banner)
+    print("[profile-evo] config")
+    print(f"  eval_size={args.eval_size} population_size={args.population_size} k_reasoning={args.k_reasoning}")
+    print(f"  generations={args.generations} llm_guide={args.llm_guide} llm_candidates={args.llm_candidates}")
+    print(f"  base_model={args.base_model} lora_path={args.lora_path}")
+    print(banner)
+
     profiles = json.loads(Path(args.profile_path).read_text(encoding="utf-8"))
     seed_profile = next((p for p in profiles if p.get("investor_type") == args.investor_type), None)
     if seed_profile is None:
@@ -424,10 +432,13 @@ def main() -> None:
     llm_logs: List[dict] = []
 
     for gen in range(args.generations):
+        print("=" * 60)
+        print(f"[gen {gen}] start  (pop={args.population_size}, eval={args.eval_size}, k={args.k_reasoning})")
+        print("-" * 60)
         fitness_map: Dict[int, float] = {}
         pop_iter = population
         if args.progress:
-            pop_iter = maybe_tqdm(population, total=len(population), desc=f"gen {gen} eval")
+            pop_iter = maybe_tqdm(population, total=len(population), desc=f"gen {gen} pop_eval")
         for p in pop_iter:
             fitness_map[id(p)] = evaluate_profile(p, eval_chats, eval_y, tokenizer, model, args)
 
@@ -437,6 +448,7 @@ def main() -> None:
         llm_entry: dict = {"generation": gen}
         candidates: List[Dict[str, float]] = []
         if args.llm_guide:
+            print(f"[gen {gen}] llm propose -> {args.llm_candidates} candidates")
             best_scores = evaluate_profile_scores(
                 best_profile,
                 eval_chats,
@@ -496,6 +508,7 @@ def main() -> None:
         print(f"[gen {gen}] best_reward={best_reward:.6f} best_weights={best_profile}")
         if args.out_dir:
             append_progress(args.out_dir, llm_entry)
+        print("=" * 60)
 
         population = evolve_population(
             population_all,
