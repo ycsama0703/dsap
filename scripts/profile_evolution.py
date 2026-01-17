@@ -76,6 +76,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--llm-sample-worst", type=int, default=2, help="How many worst (highest error) samples to show LLM.")
     ap.add_argument("--llm-sample-max-chars", type=int, default=600, help="Max chars of raw output per sample.")
     ap.add_argument("--llm-only", action="store_true", help="Disable random mutation; evolve only via LLM candidates.")
+    ap.add_argument("--llm-only-steps", type=int, default=0,
+                    help="If >0, run LLM-only for the first N generations, then allow mutation.")
     ap.add_argument("--progress", action="store_true", help="Show tqdm progress bars if available.")
     ap.set_defaults(progress=True)
     return ap.parse_args()
@@ -733,7 +735,9 @@ def main() -> None:
     stats_map = load_profile_stats(Path(args.profile_stats))
     type_stats = stats_map.get(args.investor_type, {})
 
-    if args.llm_only:
+    llm_only_steps = max(int(args.llm_only_steps), 0)
+    llm_only_initial = args.llm_only or llm_only_steps > 0
+    if llm_only_initial:
         population = [deepcopy(seed_weights) for _ in range(args.population_size)]
     else:
         population = init_population(seed_weights, n=args.population_size, sigma=0.03)
@@ -742,8 +746,10 @@ def main() -> None:
     llm_logs: List[dict] = []
 
     for gen in range(args.generations):
+        llm_only_now = args.llm_only or (llm_only_steps > 0 and gen < llm_only_steps)
+        mode = "llm-only" if llm_only_now else "mutate"
         print("=" * 60)
-        print(f"[gen {gen}] start  (pop={args.population_size}, eval={args.eval_size}, k={args.k_reasoning})")
+        print(f"[gen {gen}] start  (pop={args.population_size}, eval={args.eval_size}, k={args.k_reasoning}, mode={mode})")
         print("-" * 60)
         fitness_map: Dict[int, float] = {}
         pop_valid_counts: List[int] = []
@@ -880,7 +886,7 @@ def main() -> None:
             append_progress(args.out_dir, llm_entry)
         print("=" * 60)
 
-        if args.llm_only:
+        if llm_only_now:
             population = sorted(
                 population_all, key=lambda p: fitness_map[id(p)], reverse=True
             )[: args.population_size]
