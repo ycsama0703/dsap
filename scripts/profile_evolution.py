@@ -825,6 +825,11 @@ def main() -> None:
                     if weights:
                         candidates.append(weights)
                 llm_entry["candidate_count"] = len(candidates)
+            else:
+                print(
+                    f"[gen {gen}] llm call failed; no candidates generated "
+                    "(check API key/model/base URL connectivity)"
+                )
 
         if candidates:
             cand_valid_counts: List[int] = []
