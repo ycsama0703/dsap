@@ -103,7 +103,7 @@ for t in "${TYPES[@]}"; do
   bash scripts/sft.sh \
     -m /path/to/Qwen2.5-7B-Instruct \
     -d "artifacts/typeagg_all/sft/sft_train_${t}.jsonl" \
-    -o "outputs/sft_${t}"
+    -o "outputs/sft_output/${t}"
 done
 ```
 
@@ -112,13 +112,36 @@ This updates `artifacts/features/type_profile_semantics.json`.
 After this step, you **must** regenerate GRPO + TEST.
 
 ```bash
-BASE_MODEL=/path/to/Qwen2.5-7B-Instruct \
-SFT_OUT_ROOT=outputs \
-EVAL_ROOT=artifacts/typeagg_all \
-EVAL_KIND=grpo \
-PROFILE_PATH=artifacts/features/type_profile_semantics.json \
-OUT_DIR_ROOT=outputs/profile_evo \
-bash scripts/evolve_profiles_typeagg.sh
+export CUDA_VISIBLE_DEVICES=0,1
+BASE_MODEL=/path/to/Qwen2.5-7B-Instruct
+EVAL_ROOT=artifacts/typeagg_all_v2
+TYPES=(banks households insurance_companies investment_advisors mutual_funds pension_funds other)
+
+for t in "${TYPES[@]}"; do
+  CKPT=$(ls -td outputs/sft_output/${t}/v*/checkpoint-* 2>/dev/null | head -n 1)
+  # Example: outputs/sft_output/banks/v0-20260116-151226/checkpoint-64
+  if [[ -z "$CKPT" ]]; then
+    echo "[skip] no checkpoint for $t"
+    continue
+  fi
+
+  PYTHONPATH=. python scripts/profile_evolution.py \
+    --test-path "${EVAL_ROOT}/grpo/grpo_${t}.jsonl" \
+    --investor-type "$t" \
+    --base-model "$BASE_MODEL" \
+    --lora-path "$CKPT" \
+    --llm-guide \
+    --llm-only \
+    --llm-candidates 3 \
+    --generations 3 \
+    --population-size 4 \
+    --eval-size 40 \
+    --k-reasoning 2 \
+    --temperature 0.0 \
+    --max-new-tokens 256 \
+    --out-dir "outputs/profile_evo_exp/${t}" \
+    --write-profile-path artifacts/features/type_profile_semantics.json
+done
 ```
 
 ### 8) Stage C: rebuild GRPO + TEST with updated profiles
@@ -140,7 +163,7 @@ for t in "${TYPES[@]}"; do
     -m /path/to/Qwen2.5-7B-Instruct \
     -d "${GRPO_ROOT}/grpo/grpo_${t}.jsonl" \
     -o "outputs/grpo_${t}" \
-    -a "outputs/sft_${t}" \
+    -a "outputs/sft_output/${t}" \
     -g 2 \
     -l 512
 done
