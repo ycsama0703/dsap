@@ -144,6 +144,14 @@ for t in "${TYPES[@]}"; do
 done
 ```
 
+#### 7.1) Merge per-GPU profiles (only if you used multi-GPU evolution)
+If you ran evolution with per-GPU profile outputs (e.g. `type_profile_semantics_gpu0.json`),
+merge them back into the default profile file **before** rebuilding GRPO/TEST:
+
+```bash
+python scripts/merge_profile_outputs.py
+```
+
 ### 8) Stage C: rebuild GRPO + TEST with updated profiles
 ```bash
 SFT_END=2015-12-31 \
@@ -167,6 +175,18 @@ for t in "${TYPES[@]}"; do
     -g 2 \
     -l 512
 done
+```
+
+#### 9.1) Optional: 3-GPU GRPO training (same types split)
+```bash
+BASE_MODEL=/path/to/Qwen2.5-7B-Instruct \
+bash scripts/run_grpo_3gpus.sh
+```
+
+#### 10) Optional: 3-GPU test evaluation (per-type GRPO checkpoints)
+```bash
+BASE_MODEL=/path/to/Qwen2.5-7B-Instruct \
+bash scripts/run_test_3gpus.sh
 ```
 
 ## GRPO reward functions
