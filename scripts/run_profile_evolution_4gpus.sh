@@ -7,7 +7,7 @@ BASE_MODEL=/home/macro-econ/YuncongLiu/models/Qwen2.5-7B-Instruct
 EVAL_ROOT=artifacts/typeagg_all_v2
 OUT_ROOT=outputs/profile_evo_exp_v3
 LOG_DIR="${OUT_ROOT}/logs"
-GENERATIONS=10
+GENERATIONS=9
 
 GPU0_TYPES=(banks insurance_companies)
 GPU1_TYPES=(investment_advisors households other)
@@ -37,15 +37,15 @@ run_group() {
         --base-model "$BASE_MODEL" \
         --lora-path "$CKPT" \
         --llm-guide \
-        --llm-candidates 4 \
+        --llm-candidates 6 \
         --llm-only-steps 3 \
         --generations "$GENERATIONS" \
         --population-size 10 \
         --parents 4 \
         --children-per-parent 2 \
-        --eval-size 100 \
+        --eval-size 80 \
         --k-reasoning 1 \
-        --temperature 0.0 \
+        --temperature 0.2 \
         --max-new-tokens 512 \
         --out-dir "${OUT_ROOT}/${t}" \
         --write-profile-path "$profile_out"
