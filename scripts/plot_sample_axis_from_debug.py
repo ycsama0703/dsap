@@ -90,39 +90,32 @@ def compute_series(out_dir: Path, mode: str) -> Tuple[List[float], int]:
             gen_rewards.append([])
             continue
 
-        if mode == "best":
-            best_profile = entry.get("best_profile") or {}
-            rec = best_match_record(records, best_profile)
-            if not rec:
-                missing += 1
-                gen_rewards.append([])
+        details_list = [r.get("details") or [] for r in records]
+        if not details_list:
+            missing += 1
+            gen_rewards.append([])
+            continue
+        n_samples = max(len(d) for d in details_list)
+        per_sample: List[float] = []
+        for i in range(n_samples):
+            vals = []
+            for details in details_list:
+                if i >= len(details):
+                    continue
+                v = details[i].get("reward")
+                if v is None:
+                    continue
+                try:
+                    vals.append(float(v))
+                except Exception:
+                    continue
+            if not vals:
                 continue
-            rewards = rewards_from_details(rec.get("details") or [])
-            gen_rewards.append(rewards)
-        else:
-            # mean reward per sample across all profiles in this generation
-            details_list = [r.get("details") or [] for r in records]
-            if not details_list:
-                missing += 1
-                gen_rewards.append([])
-                continue
-            n_samples = max(len(d) for d in details_list)
-            per_sample: List[float] = []
-            for i in range(n_samples):
-                vals = []
-                for details in details_list:
-                    if i >= len(details):
-                        continue
-                    v = details[i].get("reward")
-                    if v is None:
-                        continue
-                    try:
-                        vals.append(float(v))
-                    except Exception:
-                        continue
-                if vals:
-                    per_sample.append(sum(vals) / len(vals))
-            gen_rewards.append(per_sample)
+            if mode == "best":
+                per_sample.append(max(vals))
+            else:
+                per_sample.append(sum(vals) / len(vals))
+        gen_rewards.append(per_sample)
 
     flat_rewards = [r for g in gen_rewards for r in g]
     if not flat_rewards:
@@ -130,20 +123,12 @@ def compute_series(out_dir: Path, mode: str) -> Tuple[List[float], int]:
     return flat_rewards, missing
 
 
-def smooth_series(values: List[float], window: int) -> List[float]:
-    if window <= 1 or not values:
-        return values
+def cumulative_mean(values: List[float]) -> List[float]:
     out: List[float] = []
-    csum = 0.0
-    for i, v in enumerate(values):
-        csum += v
-        start = i - window + 1
-        if start > 0:
-            csum -= values[start - 1]
-            denom = window
-        else:
-            denom = i + 1
-        out.append(csum / denom)
+    s = 0.0
+    for i, v in enumerate(values, 1):
+        s += v
+        out.append(s / i)
     return out
 
 
@@ -160,7 +145,6 @@ def main() -> None:
         default="best",
         help="Per-generation sample rewards: best profile only or mean across all profiles.",
     )
-    ap.add_argument("--window", type=int, default=1, help="Sliding window size for smoothing.")
     args = ap.parse_args()
 
     try:
@@ -173,15 +157,14 @@ def main() -> None:
         series, missing = compute_series(out_dir, args.mode)
         if not series:
             raise SystemExit("No rewards found from debug logs.")
-        series = smooth_series(series, args.window)
+        series = cumulative_mean(series)
 
         plt.figure()
         plt.plot(range(1, len(series) + 1), series, marker="o")
         plt.xlabel("Samples Evaluated")
-        plt.ylabel("Mean Reward")
-        title_mode = "best profile" if args.mode == "best" else "mean across profiles"
-        title_suffix = f", window={args.window}" if args.window > 1 else ""
-        plt.title(f"Mean Reward vs Samples ({title_mode}{title_suffix})")
+        plt.ylabel("Cumulative Mean Best Reward")
+        title_mode = "best across profiles" if args.mode == "best" else "mean across profiles"
+        plt.title(f"Cumulative Mean Reward vs Samples ({title_mode})")
         plt.grid(True)
 
         out_path = Path(args.out_path) if args.out_path else out_dir / "best_value_reward.png"
@@ -207,19 +190,18 @@ def main() -> None:
         series, missing = compute_series(tdir, args.mode)
         if not series:
             continue
-        series = smooth_series(series, args.window)
         total_missing += missing
         plotted += 1
+        series = cumulative_mean(series)
         plt.plot(range(1, len(series) + 1), series, label=tdir.name)
 
     if plotted == 0:
         raise SystemExit(f"No rewards found under {root}")
 
     plt.xlabel("Samples Evaluated")
-    plt.ylabel("Mean Reward")
-    title_mode = "best profile" if args.mode == "best" else "mean across profiles"
-    title_suffix = f", window={args.window}" if args.window > 1 else ""
-    plt.title(f"Mean Reward vs Samples ({title_mode}{title_suffix})")
+    plt.ylabel("Cumulative Mean Best Reward")
+    title_mode = "best across profiles" if args.mode == "best" else "mean across profiles"
+    plt.title(f"Cumulative Mean Reward vs Samples ({title_mode})")
     plt.grid(True)
     plt.legend()
 

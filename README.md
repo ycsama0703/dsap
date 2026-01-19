@@ -111,6 +111,11 @@ done
 This updates `artifacts/features/type_profile_semantics.json`.  
 After this step, you **must** regenerate GRPO + TEST.
 
+Evolution logic (current):
+- Each generation evaluates **all candidate profiles** on a **batch of `eval-size` samples**.
+- For each sample, we take the **best reward across profiles**.
+- The main curve uses the **cumulative mean** of those per-sample best rewards (sample-axis plot).
+
 ```bash
 export CUDA_VISIBLE_DEVICES=0,1
 BASE_MODEL=/path/to/Qwen2.5-7B-Instruct
@@ -144,7 +149,33 @@ for t in "${TYPES[@]}"; do
 done
 ```
 
-#### 7.1) Merge per-GPU profiles (only if you used multi-GPU evolution)
+#### 7.1) Evolution plots (sample-axis)
+Per-type outputs (inside each `--out-dir`):
+- `best_value_reward.png`  
+  Cumulative mean of **per-sample best reward** (x-axis = samples evaluated).
+- `best_value_reward_by_gen.png`  
+  Legacy per-generation best reward plot.
+
+To rebuild plots from logs:
+```bash
+# single type
+python scripts/plot_sample_axis_from_debug.py \
+  --out-dir outputs/profile_evo_exp/banks \
+  --mode best
+
+# all types in one figure
+python scripts/plot_sample_axis_from_debug.py \
+  --root outputs/profile_evo_exp \
+  --mode best
+```
+
+To compare before/after rewards across types:
+```bash
+python scripts/plot_profile_evo_summary.py \
+  --root outputs/profile_evo_exp
+```
+
+#### 7.2) Merge per-GPU profiles (only if you used multi-GPU evolution)
 If you ran evolution with per-GPU profile outputs (e.g. `type_profile_semantics_gpu0.json`),
 merge them back into the default profile file **before** rebuilding GRPO/TEST:
 

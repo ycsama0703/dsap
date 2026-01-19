@@ -75,6 +75,9 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--llm-sample-best", type=int, default=2, help="How many best (lowest error) samples to show LLM.")
     ap.add_argument("--llm-sample-worst", type=int, default=2, help="How many worst (highest error) samples to show LLM.")
     ap.add_argument("--llm-sample-max-chars", type=int, default=600, help="Max chars of raw output per sample.")
+    ap.add_argument("--llm-history-steps", type=int, default=20, help="How many recent sample-best entries to include.")
+    ap.add_argument("--llm-max-step", type=float, default=0.05,
+                    help="Max per-dimension delta from current weights for LLM candidates.")
     ap.add_argument("--llm-only", action="store_true", help="Disable random mutation; evolve only via LLM candidates.")
     ap.add_argument("--llm-only-steps", type=int, default=0,
                     help="If >0, run LLM-only for the first N generations, then allow mutation.")
@@ -234,6 +237,58 @@ def evaluate_profile_scores(
     return scores, details
 
 
+def evaluate_profiles_on_samples(
+    profiles: List[Dict[str, float]],
+    sample_indices: List[int],
+    eval_chats: List[List[Dict[str, str]]],
+    eval_y: List[float],
+    eval_meta: List[Dict[str, Any]],
+    tokenizer,
+    model,
+    args: argparse.Namespace,
+    progress_tag: str = "",
+) -> Tuple[Dict[int, float], Dict[int, List[Dict[str, Any]]], List[int], List[int]]:
+    rewards_map: Dict[int, List[float]] = {id(p): [] for p in profiles}
+    details_map: Dict[int, List[Dict[str, Any]]] = {id(p): [] for p in profiles}
+
+    sample_iter: Iterable[int] = sample_indices
+    if args.progress:
+        sample_iter = maybe_tqdm(sample_indices, total=len(sample_indices), desc=progress_tag or "sample_eval")
+
+    for step_idx in sample_iter:
+        sample_chat = [eval_chats[step_idx]]
+        sample_y = [eval_y[step_idx]]
+        sample_meta = [eval_meta[step_idx]]
+        for p_idx, p in enumerate(profiles):
+            scores, details = evaluate_profile_scores(
+                p,
+                sample_chat,
+                sample_y,
+                tokenizer,
+                model,
+                args,
+                progress_tag=f\"{progress_tag} s{step_idx+1} p{p_idx+1}/{len(profiles)}\",
+                eval_meta=sample_meta,
+                return_details=True,
+            )
+            if details:
+                details_map[id(p)].append(details[0])
+            if scores:
+                rewards_map[id(p)].append(float(scores[0]))
+
+    fitness_map: Dict[int, float] = {}
+    valid_counts: List[int] = []
+    total_counts: List[int] = []
+    for p in profiles:
+        rewards = rewards_map[id(p)]
+        fitness_map[id(p)] = float(np.mean(rewards)) if rewards else -1e9
+        details = details_map[id(p)]
+        valid_counts.append(count_valid_details(details))
+        total_counts.append(len(details))
+
+    return fitness_map, details_map, valid_counts, total_counts
+
+
 def evaluate_profile(
     weights: Dict[str, float],
     eval_chats: List[List[Dict[str, str]]],
@@ -269,7 +324,7 @@ def maybe_save_outputs(
     best_rewards: List[float],
     best_profiles: List[Dict[str, float]],
     llm_logs: List[dict],
-    best_sample_rewards: List[List[float]] | None = None,
+    best_sample_rewards: List[float] | None = None,
 ) -> None:
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -297,15 +352,15 @@ def maybe_save_outputs(
         plt.close()
 
         if best_sample_rewards:
-            flat_rewards = [r for gen_rewards in best_sample_rewards for r in gen_rewards if r is not None]
+            flat_rewards = [r for r in best_sample_rewards if r is not None]
             if flat_rewards:
                 cum_sum = np.cumsum(flat_rewards)
                 cum_avg = cum_sum / np.arange(1, len(flat_rewards) + 1)
                 plt.figure()
                 plt.plot(range(1, len(flat_rewards) + 1), cum_avg, marker="o")
                 plt.xlabel("Samples Evaluated")
-                plt.ylabel("Cumulative Mean Reward")
-                plt.title("Cumulative Mean Reward vs Samples")
+                plt.ylabel("Cumulative Mean Best Reward")
+                plt.title("Cumulative Mean Best Reward vs Samples")
                 plt.grid(True)
                 plt.savefig(out_path / "best_value_reward.png", dpi=150)
                 plt.close()
@@ -585,8 +640,19 @@ def safe_std_from_var(v: Any) -> float:
         return 0.0
 
 
-def build_llm_prompt(current_weights: Dict[str, float], eval_summary: dict, k: int, examples: dict | None = None) -> str:
+def build_llm_prompt(
+    current_weights: Dict[str, float],
+    eval_summary: dict,
+    k: int,
+    examples: dict | None = None,
+    history: List[Dict[str, Any]] | None = None,
+    max_step: float | None = None,
+) -> str:
     examples = examples or {}
+    history = history or []
+    step_constraint = ""
+    if max_step is not None and max_step > 0:
+        step_constraint = f"- Each weight must stay within +/-{max_step} of current weights.\n"
     def _fmt(items: List[Dict[str, Any]]) -> str:
         if not items:
             return "[]"
@@ -611,6 +677,8 @@ def build_llm_prompt(current_weights: Dict[str, float], eval_summary: dict, k: i
         f"- x_risk_mean/std: {eval_summary.get('x_risk_mean')}/{eval_summary.get('x_risk_std')}\n"
         f"- x_herd_mean/std: {eval_summary.get('x_herd_mean')}/{eval_summary.get('x_herd_std')}\n"
         f"- x_profit_mean/std: {eval_summary.get('x_profit_mean')}/{eval_summary.get('x_profit_std')}\n\n"
+        "Trajectory (recent best per-sample rewards):\n"
+        f"- recent_best: {json.dumps(history, ensure_ascii=True)}\n\n"
         "Representative samples (worst/best):\n"
         f"- worst_samples: {_fmt(examples.get('worst', []))}\n"
         f"- best_samples: {_fmt(examples.get('best', []))}\n\n"
@@ -624,6 +692,7 @@ def build_llm_prompt(current_weights: Dict[str, float], eval_summary: dict, k: i
         "- Each candidate must be non-negative and sum to 1.\n"
         "- Candidates should be diverse (avoid near-duplicates).\n"
         "- Keep rationale concise (no chain-of-thought).\n\n"
+        f"{step_constraint}"
         "Return JSON schema:\n"
         "{\n"
         '  "diagnosis": "short failure mode (<=2 sentences)",\n'
@@ -680,7 +749,11 @@ def call_llm(prompt: str, args: argparse.Namespace) -> dict | None:
     return None
 
 
-def normalize_candidate(weights: dict) -> Dict[str, float] | None:
+def normalize_candidate(
+    weights: dict,
+    current: Dict[str, float] | None = None,
+    max_step: float | None = None,
+) -> Dict[str, float] | None:
     if not isinstance(weights, dict):
         return None
     keys = ("risk_aversion", "herd_behavior", "profit_driven")
@@ -692,6 +765,18 @@ def normalize_candidate(weights: dict) -> Dict[str, float] | None:
             vals[k] = float(weights[k])
         except Exception:
             return None
+    if current and max_step is not None and max_step > 0:
+        for k in keys:
+            try:
+                cur = float(current.get(k, vals[k]))
+            except Exception:
+                cur = vals[k]
+            delta = vals[k] - cur
+            if delta > max_step:
+                delta = max_step
+            elif delta < -max_step:
+                delta = -max_step
+            vals[k] = cur + delta
     for k in keys:
         if vals[k] < 0:
             vals[k] = 0.0
@@ -724,8 +809,8 @@ def main() -> None:
         raise RuntimeError("no eval samples found in test set")
     indices = list(range(len(chats)))
     random.shuffle(indices)
-    eval_n = min(args.eval_size, len(indices))
-    indices = indices[:eval_n]
+    total_steps = min(len(indices), args.eval_size * args.generations)
+    indices = indices[:total_steps]
     eval_chats = [chats[i] for i in indices]
     eval_y = [y_true[i] for i in indices]
     permno_map = load_permno_mapping(Path("data/ticker_mapping.csv"))
@@ -748,6 +833,8 @@ def main() -> None:
                 "overall_mean": ps.get("overall_mean"),
             }
         )
+    steps_per_gen = args.eval_size
+    gen_count = (len(eval_chats) + steps_per_gen - 1) // steps_per_gen
 
     tokenizer, model = load_model_and_tokenizer(
         args.base_model, args.lora_path, torch_dtype=args.torch_dtype
@@ -765,38 +852,39 @@ def main() -> None:
         population = init_population(seed_weights, n=args.population_size, sigma=0.03)
     best_rewards: List[float] = []
     best_profiles: List[Dict[str, float]] = []
-    best_sample_rewards: List[List[float]] = []
+    best_sample_rewards: List[float] = []
+    best_sample_history: List[Dict[str, Any]] = []
     llm_logs: List[dict] = []
 
-    for gen in range(args.generations):
-        details_map: Dict[int, List[Dict[str, Any]]] = {}
+    for gen in range(gen_count):
+        start = gen * steps_per_gen
+        end = min(len(eval_chats), start + steps_per_gen)
+        if start >= end:
+            break
+        sample_indices = list(range(start, end))
         llm_only_now = args.llm_only or (llm_only_steps > 0 and gen < llm_only_steps)
         mode = "llm-only" if llm_only_now else "mutate"
         print("=" * 60)
-        print(f"[gen {gen}] start  (pop={args.population_size}, eval={args.eval_size}, k={args.k_reasoning}, mode={mode})")
+        print(
+            f"[gen {gen}] start  (pop={args.population_size}, samples={len(sample_indices)}, "
+            f"k={args.k_reasoning}, mode={mode})"
+        )
         print("-" * 60)
-        fitness_map: Dict[int, float] = {}
-        pop_valid_counts: List[int] = []
-        pop_total_counts: List[int] = []
-        pop_iter = list(enumerate(population))
-        if args.progress:
-            pop_iter = maybe_tqdm(pop_iter, total=len(population), desc=f"gen {gen} pop_eval")
-        for idx, p in pop_iter:
-            scores, details = evaluate_profile_scores(
-                p,
-                eval_chats,
-                eval_y,
-                tokenizer,
-                model,
-                args,
-                progress_tag=f"gen {gen} pop {idx+1}/{len(population)}",
-                eval_meta=eval_meta,
-                return_details=True,
-            )
-            fitness_map[id(p)] = float(np.mean(scores)) if scores else -1e9
-            details_map[id(p)] = details
-            pop_valid_counts.append(count_valid_details(details))
-            pop_total_counts.append(len(details))
+
+        fitness_map, details_map, pop_valid_counts, pop_total_counts = evaluate_profiles_on_samples(
+            population,
+            sample_indices,
+            eval_chats,
+            eval_y,
+            eval_meta,
+            tokenizer,
+            model,
+            args,
+            progress_tag=f"gen {gen} pop_eval",
+        )
+        for idx, p in enumerate(population):
+            details = details_map[id(p)]
+            scores = [d["reward"] for d in details if d.get("reward") is not None]
             if args.out_dir:
                 write_candidate_debug(args.out_dir, gen, "population", idx, p, scores, details)
 
@@ -817,17 +905,8 @@ def main() -> None:
         candidates: List[Dict[str, float]] = []
         if args.llm_guide:
             print(f"[gen {gen}] llm propose -> {args.llm_candidates} candidates")
-            best_scores, best_details = evaluate_profile_scores(
-                best_profile,
-                eval_chats,
-                eval_y,
-                tokenizer,
-                model,
-                args,
-                progress_tag=f"gen {gen} best",
-                eval_meta=eval_meta,
-                return_details=True,
-            )
+            best_details = details_map.get(id(best_profile), [])
+            best_scores = [d["reward"] for d in best_details if d.get("reward") is not None]
             eval_summary = {
                 "value_reward_mean": float(np.mean(best_scores)) if best_scores else None,
                 "value_reward_std": float(np.std(best_scores)) if best_scores else None,
@@ -843,7 +922,15 @@ def main() -> None:
                 raw_out = truncate_text(d.get("completion"), args.llm_sample_max_chars)
                 trimmed.append({**d, "completion": raw_out})
             examples = select_llm_examples(trimmed, args.llm_sample_best, args.llm_sample_worst)
-            prompt = build_llm_prompt(best_profile, eval_summary, args.llm_candidates, examples=examples)
+            history = best_sample_history[-max(args.llm_history_steps, 0) :]
+            prompt = build_llm_prompt(
+                best_profile,
+                eval_summary,
+                args.llm_candidates,
+                examples=examples,
+                history=history,
+                max_step=args.llm_max_step,
+            )
             resp = call_llm(prompt, args)
             if resp:
                 llm_entry["llm_prompt"] = prompt
@@ -852,7 +939,11 @@ def main() -> None:
                 llm_entry["evidence"] = resp.get("evidence")
                 raw_candidates = resp.get("candidates") or []
                 for c in raw_candidates:
-                    weights = normalize_candidate(c.get("weights") if isinstance(c, dict) else None)
+                    weights = normalize_candidate(
+                        c.get("weights") if isinstance(c, dict) else None,
+                        current=best_profile,
+                        max_step=args.llm_max_step,
+                    )
                     if weights:
                         candidates.append(weights)
                 llm_entry["candidate_count"] = len(candidates)
@@ -862,30 +953,27 @@ def main() -> None:
                     "(check API key/model/base URL connectivity)"
                 )
 
+        population_all = population
         if candidates:
-            cand_valid_counts: List[int] = []
-            cand_total_counts: List[int] = []
-            cand_iter = list(enumerate(candidates))
-            if args.progress:
-                cand_iter = maybe_tqdm(cand_iter, total=len(candidates), desc=f"gen {gen} cand_eval")
-            for idx, cand in cand_iter:
-                scores, details = evaluate_profile_scores(
-                    cand,
-                    eval_chats,
-                    eval_y,
-                    tokenizer,
-                    model,
-                    args,
-                    progress_tag=f"gen {gen} cand {idx+1}/{len(candidates)}",
-                    eval_meta=eval_meta,
-                    return_details=True,
-                )
-                fitness_map[id(cand)] = float(np.mean(scores)) if scores else -1e9
+            cand_fitness, cand_details, cand_valid_counts, cand_total_counts = evaluate_profiles_on_samples(
+                candidates,
+                sample_indices,
+                eval_chats,
+                eval_y,
+                eval_meta,
+                tokenizer,
+                model,
+                args,
+                progress_tag=f"gen {gen} cand_eval",
+            )
+            for idx, cand in enumerate(candidates):
+                details = cand_details[id(cand)]
+                scores = [d["reward"] for d in details if d.get("reward") is not None]
+                fitness_map[id(cand)] = cand_fitness[id(cand)]
                 details_map[id(cand)] = details
-                cand_valid_counts.append(count_valid_details(details))
-                cand_total_counts.append(len(details))
                 if args.out_dir:
                     write_candidate_debug(args.out_dir, gen, "llm_candidates", idx, cand, scores, details)
+
             population_all = population + candidates
             if cand_valid_counts:
                 mean_valid = float(np.mean(cand_valid_counts))
@@ -896,31 +984,38 @@ def main() -> None:
                     f"[gen {gen}] llm_candidates valid_mean={mean_valid:.2f} "
                     f"min={min_valid} max={max_valid} total_mean={mean_total:.2f}"
                 )
-        else:
-            population_all = population
+
+        # per-sample best rewards for this generation (across all profiles)
+        for offset in range(len(sample_indices)):
+            best_r = None
+            best_w: Dict[str, float] | None = None
+            for p in population_all:
+                details = details_map.get(id(p), [])
+                if offset >= len(details):
+                    continue
+                r = details[offset].get("reward")
+                if r is None:
+                    continue
+                if best_r is None or r > best_r:
+                    best_r = float(r)
+                    best_w = p
+            if best_r is None:
+                best_r = -1.0
+            best_sample_rewards.append(best_r)
+            if best_w is None:
+                best_w = {}
+            best_sample_history.append(
+                {"reward": best_r, "weights": dict(best_w)}
+            )
 
         best_profile = max(population_all, key=lambda p: fitness_map[id(p)])
         best_reward = fitness_map[id(best_profile)]
         best_rewards.append(best_reward)
         best_profiles.append(deepcopy(best_profile))
-        best_details = details_map.get(id(best_profile))
-        if best_details is None:
-            _, best_details = evaluate_profile_scores(
-                best_profile,
-                eval_chats,
-                eval_y,
-                tokenizer,
-                model,
-                args,
-                progress_tag=f"gen {gen} best_recheck",
-                eval_meta=eval_meta,
-                return_details=True,
-            )
-        best_sample_rewards.append(
-            [d["reward"] for d in best_details if d.get("reward") is not None]
-        )
         llm_entry["best_reward"] = best_reward
         llm_entry["best_profile"] = best_profile
+        llm_entry["sample_best_mean"] = float(np.mean(best_sample_rewards[-len(sample_indices):]))
+        llm_entry["sample_best_count"] = len(sample_indices)
         llm_logs.append(llm_entry)
 
         print(f"[gen {gen}] best_reward={best_reward:.6f} best_weights={best_profile}")
