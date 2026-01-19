@@ -793,7 +793,10 @@ def main() -> None:
     banner = "=" * 72
     print(banner)
     print("[profile-evo] config")
-    print(f"  eval_size={args.eval_size} population_size={args.population_size} k_reasoning={args.k_reasoning}")
+    print(
+        f"  eval_size={args.eval_size} population_size={args.population_size} "
+        f"k_reasoning={args.k_reasoning} samples_per_gen=1"
+    )
     print(f"  generations={args.generations} llm_guide={args.llm_guide} llm_candidates={args.llm_candidates}")
     print(f"  base_model={args.base_model} lora_path={args.lora_path}")
     print(banner)
@@ -809,7 +812,7 @@ def main() -> None:
         raise RuntimeError("no eval samples found in test set")
     indices = list(range(len(chats)))
     random.shuffle(indices)
-    total_steps = min(len(indices), args.eval_size * args.generations)
+    total_steps = min(len(indices), args.eval_size)
     indices = indices[:total_steps]
     eval_chats = [chats[i] for i in indices]
     eval_y = [y_true[i] for i in indices]
@@ -833,8 +836,9 @@ def main() -> None:
                 "overall_mean": ps.get("overall_mean"),
             }
         )
-    steps_per_gen = args.eval_size
-    gen_count = (len(eval_chats) + steps_per_gen - 1) // steps_per_gen
+    steps_per_gen = 1
+    gen_count = len(eval_chats)
+    print(f"[profile-evo] effective_generations={gen_count} (1 sample/gen)")
 
     tokenizer, model = load_model_and_tokenizer(
         args.base_model, args.lora_path, torch_dtype=args.torch_dtype

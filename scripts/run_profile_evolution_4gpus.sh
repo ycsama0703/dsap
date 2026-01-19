@@ -9,9 +9,10 @@ OUT_ROOT=outputs/profile_evo_exp_v3
 LOG_DIR="${OUT_ROOT}/logs"
 GENERATIONS=9
 
-GPU0_TYPES=(banks insurance_companies)
-GPU1_TYPES=(investment_advisors households other)
+GPU0_TYPES=(banks)
+GPU1_TYPES=(other)
 GPU2_TYPES=(mutual_funds pension_funds)
+GPU3_TYPES=(households insurance_companies investment_advisors)
 
 mkdir -p "$LOG_DIR"
 
@@ -61,6 +62,8 @@ run_group 1 artifacts/features/type_profile_semantics_gpu1.json "${LOG_DIR}/gpu1
 PIDS+=($!)
 run_group 2 artifacts/features/type_profile_semantics_gpu2.json "${LOG_DIR}/gpu2.log" "${GPU2_TYPES[@]}"
 PIDS+=($!)
+run_group 3 artifacts/features/type_profile_semantics_gpu3.json "${LOG_DIR}/gpu3.log" "${GPU3_TYPES[@]}"
+PIDS+=($!)
 
 progress_count() {
   local t="$1"
@@ -101,17 +104,20 @@ while :; do
   g0_done=$(group_done "${GPU0_TYPES[@]}")
   g1_done=$(group_done "${GPU1_TYPES[@]}")
   g2_done=$(group_done "${GPU2_TYPES[@]}")
+  g3_done=$(group_done "${GPU3_TYPES[@]}")
   g0_total=$(group_total "${GPU0_TYPES[@]}")
   g1_total=$(group_total "${GPU1_TYPES[@]}")
   g2_total=$(group_total "${GPU2_TYPES[@]}")
-  total_done=$((g0_done + g1_done + g2_done))
-  total_total=$((g0_total + g1_total + g2_total))
+  g3_total=$(group_total "${GPU3_TYPES[@]}")
+  total_done=$((g0_done + g1_done + g2_done + g3_done))
+  total_total=$((g0_total + g1_total + g2_total + g3_total))
 
-  printf "\r[progress] total %d/%d | gpu0 %d/%d | gpu1 %d/%d | gpu2 %d/%d" \
+  printf "\r[progress] total %d/%d | gpu0 %d/%d | gpu1 %d/%d | gpu2 %d/%d | gpu3 %d/%d" \
     "$total_done" "$total_total" \
     "$g0_done" "$g0_total" \
     "$g1_done" "$g1_total" \
-    "$g2_done" "$g2_total"
+    "$g2_done" "$g2_total" \
+    "$g3_done" "$g3_total"
   sleep 60
 done
 
