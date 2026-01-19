@@ -269,7 +269,7 @@ def evaluate_profiles_on_samples(
                 tokenizer,
                 model,
                 args,
-                progress_tag=f\"{progress_tag} s{step_idx+1} p{p_idx+1}/{len(profiles)}\",
+                progress_tag=f"{progress_tag} s{step_idx+1} p{p_idx+1}/{len(profiles)}",
                 eval_meta=sample_meta,
                 return_details=True,
             )
