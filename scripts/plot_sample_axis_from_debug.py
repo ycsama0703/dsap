@@ -71,7 +71,7 @@ def rewards_from_details(details: List[Dict[str, Any]]) -> List[float]:
     return out
 
 
-def compute_cum_avg(out_dir: Path, mode: str) -> Tuple[List[float], int]:
+def compute_series(out_dir: Path, mode: str) -> Tuple[List[float], int]:
     progress_path = out_dir / "progress.jsonl"
     if not progress_path.exists():
         return [], 0
@@ -127,13 +127,7 @@ def compute_cum_avg(out_dir: Path, mode: str) -> Tuple[List[float], int]:
     flat_rewards = [r for g in gen_rewards for r in g]
     if not flat_rewards:
         return [], missing
-
-    cum_avg = []
-    s = 0.0
-    for i, r in enumerate(flat_rewards, 1):
-        s += r
-        cum_avg.append(s / i)
-    return cum_avg, missing
+    return flat_rewards, missing
 
 
 def main() -> None:
@@ -158,16 +152,16 @@ def main() -> None:
 
     if args.out_dir:
         out_dir = Path(args.out_dir)
-        cum_avg, missing = compute_cum_avg(out_dir, args.mode)
-        if not cum_avg:
+        series, missing = compute_series(out_dir, args.mode)
+        if not series:
             raise SystemExit("No rewards found from debug logs.")
 
         plt.figure()
-        plt.plot(range(1, len(cum_avg) + 1), cum_avg, marker="o")
+        plt.plot(range(1, len(series) + 1), series, marker="o")
         plt.xlabel("Samples Evaluated")
-        plt.ylabel("Cumulative Mean Reward")
+        plt.ylabel("Mean Reward")
         title_mode = "best profile" if args.mode == "best" else "mean across profiles"
-        plt.title(f"Cumulative Mean Reward vs Samples ({title_mode})")
+        plt.title(f"Mean Reward vs Samples ({title_mode})")
         plt.grid(True)
 
         out_path = Path(args.out_path) if args.out_path else out_dir / "best_value_reward.png"
@@ -190,20 +184,20 @@ def main() -> None:
     total_missing = 0
     plotted = 0
     for tdir in type_dirs:
-        cum_avg, missing = compute_cum_avg(tdir, args.mode)
-        if not cum_avg:
+        series, missing = compute_series(tdir, args.mode)
+        if not series:
             continue
         total_missing += missing
         plotted += 1
-        plt.plot(range(1, len(cum_avg) + 1), cum_avg, label=tdir.name)
+        plt.plot(range(1, len(series) + 1), series, label=tdir.name)
 
     if plotted == 0:
         raise SystemExit(f"No rewards found under {root}")
 
     plt.xlabel("Samples Evaluated")
-    plt.ylabel("Cumulative Mean Reward")
+    plt.ylabel("Mean Reward")
     title_mode = "best profile" if args.mode == "best" else "mean across profiles"
-    plt.title(f"Cumulative Mean Reward vs Samples ({title_mode})")
+    plt.title(f"Mean Reward vs Samples ({title_mode})")
     plt.grid(True)
     plt.legend()
 
