@@ -5,15 +5,14 @@ export CUDA_VISIBLE_DEVICES=""
 
 BASE_MODEL=/home/macro-econ/YuncongLiu/models/Qwen2.5-7B-Instruct
 EVAL_ROOT=artifacts/typeagg_all_v2
-OUT_ROOT=outputs/profile_evo_exp_v3
+OUT_ROOT=outputs/profile_evo_exp_v5
 PROFILE_INIT=artifacts/features/type_profile_semantics_init.json
 LOG_DIR="${OUT_ROOT}/logs"
-GENERATIONS=9
+EVAL_SIZE=100
 
-GPU0_TYPES=(banks)
-GPU1_TYPES=(other)
+GPU0_TYPES=(banks insurance_companies)
 GPU2_TYPES=(mutual_funds pension_funds)
-GPU3_TYPES=(households insurance_companies investment_advisors)
+GPU3_TYPES=(investment_advisors other)
 
 mkdir -p "$LOG_DIR"
 
@@ -46,7 +45,7 @@ run_group() {
         --population-size 12 \
         --parents 4 \
         --children-per-parent 2 \
-        --eval-size 100 \
+        --eval-size "$EVAL_SIZE" \
         --k-reasoning 1 \
         --temperature 0.0 \
         --max-new-tokens 512 \
@@ -60,8 +59,6 @@ run_group() {
 
 PIDS=()
 run_group 0 artifacts/features/type_profile_semantics_gpu0.json "${LOG_DIR}/gpu0.log" "${GPU0_TYPES[@]}"
-PIDS+=($!)
-run_group 1 artifacts/features/type_profile_semantics_gpu1.json "${LOG_DIR}/gpu1.log" "${GPU1_TYPES[@]}"
 PIDS+=($!)
 run_group 2 artifacts/features/type_profile_semantics_gpu2.json "${LOG_DIR}/gpu2.log" "${GPU2_TYPES[@]}"
 PIDS+=($!)
@@ -89,7 +86,7 @@ group_done() {
 
 group_total() {
   local count=$#
-  echo $((count * GENERATIONS))
+  echo $((count * EVAL_SIZE))
 }
 
 while :; do
@@ -105,20 +102,17 @@ while :; do
   fi
 
   g0_done=$(group_done "${GPU0_TYPES[@]}")
-  g1_done=$(group_done "${GPU1_TYPES[@]}")
   g2_done=$(group_done "${GPU2_TYPES[@]}")
   g3_done=$(group_done "${GPU3_TYPES[@]}")
   g0_total=$(group_total "${GPU0_TYPES[@]}")
-  g1_total=$(group_total "${GPU1_TYPES[@]}")
   g2_total=$(group_total "${GPU2_TYPES[@]}")
   g3_total=$(group_total "${GPU3_TYPES[@]}")
-  total_done=$((g0_done + g1_done + g2_done + g3_done))
-  total_total=$((g0_total + g1_total + g2_total + g3_total))
+  total_done=$((g0_done + g2_done + g3_done))
+  total_total=$((g0_total + g2_total + g3_total))
 
-  printf "\r[progress] total %d/%d | gpu0 %d/%d | gpu1 %d/%d | gpu2 %d/%d | gpu3 %d/%d" \
+  printf "\r[progress] total %d/%d | gpu0 %d/%d | gpu2 %d/%d | gpu3 %d/%d" \
     "$total_done" "$total_total" \
     "$g0_done" "$g0_total" \
-    "$g1_done" "$g1_total" \
     "$g2_done" "$g2_total" \
     "$g3_done" "$g3_total"
   sleep 60
