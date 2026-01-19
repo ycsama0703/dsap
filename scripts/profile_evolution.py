@@ -264,7 +264,13 @@ def evolve_population(
     return new_population[:pop_size]
 
 
-def maybe_save_outputs(out_dir: str, best_rewards: List[float], best_profiles: List[Dict[str, float]], llm_logs: List[dict]) -> None:
+def maybe_save_outputs(
+    out_dir: str,
+    best_rewards: List[float],
+    best_profiles: List[Dict[str, float]],
+    llm_logs: List[dict],
+    best_sample_rewards: List[List[float]] | None = None,
+) -> None:
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -272,6 +278,8 @@ def maybe_save_outputs(out_dir: str, best_rewards: List[float], best_profiles: L
         "best_profiles": best_profiles,
         "llm_logs": llm_logs,
     }
+    if best_sample_rewards is not None:
+        payload["best_sample_rewards"] = best_sample_rewards
     (out_path / "profile_evolution_results.json").write_text(
         json.dumps(payload, indent=2, ensure_ascii=True)
     )
@@ -285,8 +293,22 @@ def maybe_save_outputs(out_dir: str, best_rewards: List[float], best_profiles: L
         plt.ylabel("Best Value Reward")
         plt.title("Best Value Reward vs Generation")
         plt.grid(True)
-        plt.savefig(out_path / "best_value_reward.png", dpi=150)
+        plt.savefig(out_path / "best_value_reward_by_gen.png", dpi=150)
         plt.close()
+
+        if best_sample_rewards:
+            flat_rewards = [r for gen_rewards in best_sample_rewards for r in gen_rewards if r is not None]
+            if flat_rewards:
+                cum_sum = np.cumsum(flat_rewards)
+                cum_avg = cum_sum / np.arange(1, len(flat_rewards) + 1)
+                plt.figure()
+                plt.plot(range(1, len(flat_rewards) + 1), cum_avg, marker="o")
+                plt.xlabel("Samples Evaluated")
+                plt.ylabel("Cumulative Mean Reward")
+                plt.title("Cumulative Mean Reward vs Samples")
+                plt.grid(True)
+                plt.savefig(out_path / "best_value_reward.png", dpi=150)
+                plt.close()
 
         ra = [p["risk_aversion"] for p in best_profiles]
         hb = [p["herd_behavior"] for p in best_profiles]
@@ -743,9 +765,11 @@ def main() -> None:
         population = init_population(seed_weights, n=args.population_size, sigma=0.03)
     best_rewards: List[float] = []
     best_profiles: List[Dict[str, float]] = []
+    best_sample_rewards: List[List[float]] = []
     llm_logs: List[dict] = []
 
     for gen in range(args.generations):
+        details_map: Dict[int, List[Dict[str, Any]]] = {}
         llm_only_now = args.llm_only or (llm_only_steps > 0 and gen < llm_only_steps)
         mode = "llm-only" if llm_only_now else "mutate"
         print("=" * 60)
@@ -770,6 +794,7 @@ def main() -> None:
                 return_details=True,
             )
             fitness_map[id(p)] = float(np.mean(scores)) if scores else -1e9
+            details_map[id(p)] = details
             pop_valid_counts.append(count_valid_details(details))
             pop_total_counts.append(len(details))
             if args.out_dir:
@@ -856,6 +881,7 @@ def main() -> None:
                     return_details=True,
                 )
                 fitness_map[id(cand)] = float(np.mean(scores)) if scores else -1e9
+                details_map[id(cand)] = details
                 cand_valid_counts.append(count_valid_details(details))
                 cand_total_counts.append(len(details))
                 if args.out_dir:
@@ -877,6 +903,22 @@ def main() -> None:
         best_reward = fitness_map[id(best_profile)]
         best_rewards.append(best_reward)
         best_profiles.append(deepcopy(best_profile))
+        best_details = details_map.get(id(best_profile))
+        if best_details is None:
+            _, best_details = evaluate_profile_scores(
+                best_profile,
+                eval_chats,
+                eval_y,
+                tokenizer,
+                model,
+                args,
+                progress_tag=f"gen {gen} best_recheck",
+                eval_meta=eval_meta,
+                return_details=True,
+            )
+        best_sample_rewards.append(
+            [d["reward"] for d in best_details if d.get("reward") is not None]
+        )
         llm_entry["best_reward"] = best_reward
         llm_entry["best_profile"] = best_profile
         llm_logs.append(llm_entry)
@@ -901,7 +943,7 @@ def main() -> None:
             )
 
     if args.out_dir:
-        maybe_save_outputs(args.out_dir, best_rewards, best_profiles, llm_logs)
+        maybe_save_outputs(args.out_dir, best_rewards, best_profiles, llm_logs, best_sample_rewards)
     if args.write_profile_path:
         out_path = Path(args.write_profile_path)
         data = json.loads(Path(args.profile_path).read_text(encoding="utf-8"))

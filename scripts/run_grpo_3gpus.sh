@@ -5,6 +5,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASE_MODEL="${BASE_MODEL:-}"
 GRPO_ROOT="${GRPO_ROOT:-artifacts/typeagg_all_v2}"
 LOG_DIR="${LOG_DIR:-outputs/grpo_logs}"
+if [[ -n "${SWIFT_SWANLAB_TOKEN:-}" ]]; then
+  SWIFT_REPORT_TO="${SWIFT_REPORT_TO:-swanlab}"
+  SWIFT_SWANLAB_PROJECT="${SWIFT_SWANLAB_PROJECT:-dsap}"
+  SWIFT_SWANLAB_WORKSPACE="${SWIFT_SWANLAB_WORKSPACE:-ycsama0703}"
+fi
 
 if [[ -z "$BASE_MODEL" ]]; then
   echo "[error] Set BASE_MODEL to your local Qwen model path." >&2
