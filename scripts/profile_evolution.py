@@ -81,6 +81,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--llm-only", action="store_true", help="Disable random mutation; evolve only via LLM candidates.")
     ap.add_argument("--llm-only-steps", type=int, default=0,
                     help="If >0, run LLM-only for the first N generations, then allow mutation.")
+    ap.add_argument("--resume", action="store_true",
+                    help="Resume from existing out-dir progress/debug logs if present.")
     ap.add_argument("--progress", action="store_true", help="Show tqdm progress bars if available.")
     ap.set_defaults(progress=True)
     return ap.parse_args()
@@ -389,6 +391,76 @@ def append_progress(out_dir: str, record: dict) -> None:
     prog_path = out_path / "progress.jsonl"
     with prog_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=True) + "\n")
+
+
+def load_progress_records(out_dir: str) -> List[Dict[str, Any]]:
+    prog_path = Path(out_dir) / "progress.jsonl"
+    if not prog_path.exists():
+        return []
+    records = []
+    for line in prog_path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            records.append(json.loads(line))
+    return records
+
+
+def load_debug_records(gen_dir: Path) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    for name in ("population.jsonl", "llm_candidates.jsonl"):
+        path = gen_dir / name
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                records.append(json.loads(line))
+    return records
+
+
+def mean_reward_from_record(record: Dict[str, Any]) -> float | None:
+    mr = record.get("mean_reward")
+    if mr is not None:
+        try:
+            return float(mr)
+        except Exception:
+            return None
+    details = record.get("details") or []
+    vals = []
+    for d in details:
+        r = d.get("reward")
+        if r is None:
+            continue
+        try:
+            vals.append(float(r))
+        except Exception:
+            continue
+    if not vals:
+        return None
+    return float(np.mean(vals))
+
+
+def best_sample_from_records(records: List[Dict[str, Any]]) -> Tuple[float, Dict[str, float]]:
+    best_r = None
+    best_w: Dict[str, float] = {}
+    for r in records:
+        details = r.get("details") or []
+        val = None
+        if details:
+            v = details[0].get("reward")
+            if v is not None:
+                try:
+                    val = float(v)
+                except Exception:
+                    val = None
+        if val is None:
+            val = mean_reward_from_record(r)
+        if val is None:
+            continue
+        if best_r is None or val > best_r:
+            best_r = val
+            best_w = dict(r.get("weights") or {})
+    if best_r is None:
+        best_r = -1.0
+    return best_r, best_w
 
 
 def extract_think(text: str | None) -> str | None:
@@ -850,17 +922,74 @@ def main() -> None:
 
     llm_only_steps = max(int(args.llm_only_steps), 0)
     llm_only_initial = args.llm_only or llm_only_steps > 0
-    if llm_only_initial:
-        population = [deepcopy(seed_weights) for _ in range(args.population_size)]
-    else:
-        population = init_population(seed_weights, n=args.population_size, sigma=0.03)
+
+    population: List[Dict[str, float]] | None = None
     best_rewards: List[float] = []
     best_profiles: List[Dict[str, float]] = []
     best_sample_rewards: List[float] = []
     best_sample_history: List[Dict[str, Any]] = []
     llm_logs: List[dict] = []
+    start_gen = 0
 
-    for gen in range(gen_count):
+    if args.resume and args.out_dir:
+        progress_records = load_progress_records(args.out_dir)
+        if progress_records:
+            progress_records = sorted(progress_records, key=lambda r: r.get("generation", 0))
+            last_gen = int(progress_records[-1].get("generation", -1))
+            start_gen = last_gen + 1
+            if start_gen >= gen_count:
+                print(f"[profile-evo] resume: nothing to do (last_gen={last_gen})")
+                return
+            for r in progress_records:
+                if r.get("best_reward") is not None:
+                    best_rewards.append(float(r["best_reward"]))
+                if r.get("best_profile") is not None:
+                    best_profiles.append(dict(r["best_profile"]))
+                llm_logs.append(r)
+            for gen in range(start_gen):
+                gen_dir = Path(args.out_dir) / "debug" / f"gen_{gen}"
+                records = load_debug_records(gen_dir)
+                best_r, best_w = best_sample_from_records(records)
+                best_sample_rewards.append(best_r)
+                best_sample_history.append({"reward": best_r, "weights": dict(best_w)})
+            last_gen_dir = Path(args.out_dir) / "debug" / f"gen_{last_gen}"
+            last_records = load_debug_records(last_gen_dir)
+            pop_records = [r for r in last_records if r.get("stage") == "population"]
+            cand_records = [r for r in last_records if r.get("stage") == "llm_candidates"]
+            if pop_records:
+                pop = [dict(r.get("weights") or {}) for r in pop_records]
+                cand = [dict(r.get("weights") or {}) for r in cand_records]
+                fitness_map: Dict[int, float] = {}
+                for r, p in zip(pop_records, pop):
+                    mr = mean_reward_from_record(r)
+                    fitness_map[id(p)] = mr if mr is not None else -1e9
+                for r, c in zip(cand_records, cand):
+                    mr = mean_reward_from_record(r)
+                    fitness_map[id(c)] = mr if mr is not None else -1e9
+                population_all = pop + cand
+                llm_only_now = args.llm_only or (llm_only_steps > 0 and last_gen < llm_only_steps)
+                if llm_only_now:
+                    population = sorted(
+                        population_all, key=lambda p: fitness_map[id(p)], reverse=True
+                    )[: args.population_size]
+                else:
+                    population = evolve_population(
+                        population_all,
+                        fitness_map,
+                        parents=args.parents,
+                        children_per_parent=args.children_per_parent,
+                        mutation_sigma=args.mutation_sigma,
+                        pop_size=args.population_size,
+                    )
+            print(f"[profile-evo] resume from gen {start_gen}/{gen_count} (samples processed={start_gen})")
+
+    if population is None:
+        if llm_only_initial:
+            population = [deepcopy(seed_weights) for _ in range(args.population_size)]
+        else:
+            population = init_population(seed_weights, n=args.population_size, sigma=0.03)
+
+    for gen in range(start_gen, gen_count):
         start = gen * steps_per_gen
         end = min(len(eval_chats), start + steps_per_gen)
         if start >= end:

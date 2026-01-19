@@ -39,15 +39,16 @@ run_group() {
         --lora-path "$CKPT" \
         --llm-guide \
         --llm-candidates 6 \
-        --llm-only-steps 3 \
-        --generations "$GENERATIONS" \
-        --population-size 10 \
+        --llm-only \
+        --llm-max-step 0.05 \
+        --population-size 12 \
         --parents 4 \
         --children-per-parent 2 \
-        --eval-size 80 \
+        --eval-size 100 \
         --k-reasoning 1 \
-        --temperature 0.2 \
+        --temperature 0.0 \
         --max-new-tokens 512 \
+        --batch-size 16 \
         --out-dir "${OUT_ROOT}/${t}" \
         --write-profile-path "$profile_out"
     done
