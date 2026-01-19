@@ -6,6 +6,7 @@ export CUDA_VISIBLE_DEVICES=""
 BASE_MODEL=/home/macro-econ/YuncongLiu/models/Qwen2.5-7B-Instruct
 EVAL_ROOT=artifacts/typeagg_all_v2
 OUT_ROOT=outputs/profile_evo_exp_v3
+PROFILE_INIT=artifacts/features/type_profile_semantics_init.json
 LOG_DIR="${OUT_ROOT}/logs"
 GENERATIONS=9
 
@@ -35,6 +36,7 @@ run_group() {
       PYTHONPATH=. python scripts/profile_evolution.py \
         --test-path "${EVAL_ROOT}/grpo/grpo_${t}.jsonl" \
         --investor-type "$t" \
+        --profile-path "$PROFILE_INIT" \
         --base-model "$BASE_MODEL" \
         --lora-path "$CKPT" \
         --llm-guide \
