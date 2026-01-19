@@ -130,6 +130,23 @@ def compute_series(out_dir: Path, mode: str) -> Tuple[List[float], int]:
     return flat_rewards, missing
 
 
+def smooth_series(values: List[float], window: int) -> List[float]:
+    if window <= 1 or not values:
+        return values
+    out: List[float] = []
+    csum = 0.0
+    for i, v in enumerate(values):
+        csum += v
+        start = i - window + 1
+        if start > 0:
+            csum -= values[start - 1]
+            denom = window
+        else:
+            denom = i + 1
+        out.append(csum / denom)
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Plot sample-axis cumulative mean reward.")
     group = ap.add_mutually_exclusive_group(required=True)
@@ -143,6 +160,7 @@ def main() -> None:
         default="best",
         help="Per-generation sample rewards: best profile only or mean across all profiles.",
     )
+    ap.add_argument("--window", type=int, default=1, help="Sliding window size for smoothing.")
     args = ap.parse_args()
 
     try:
@@ -155,13 +173,15 @@ def main() -> None:
         series, missing = compute_series(out_dir, args.mode)
         if not series:
             raise SystemExit("No rewards found from debug logs.")
+        series = smooth_series(series, args.window)
 
         plt.figure()
         plt.plot(range(1, len(series) + 1), series, marker="o")
         plt.xlabel("Samples Evaluated")
         plt.ylabel("Mean Reward")
         title_mode = "best profile" if args.mode == "best" else "mean across profiles"
-        plt.title(f"Mean Reward vs Samples ({title_mode})")
+        title_suffix = f", window={args.window}" if args.window > 1 else ""
+        plt.title(f"Mean Reward vs Samples ({title_mode}{title_suffix})")
         plt.grid(True)
 
         out_path = Path(args.out_path) if args.out_path else out_dir / "best_value_reward.png"
@@ -187,6 +207,7 @@ def main() -> None:
         series, missing = compute_series(tdir, args.mode)
         if not series:
             continue
+        series = smooth_series(series, args.window)
         total_missing += missing
         plotted += 1
         plt.plot(range(1, len(series) + 1), series, label=tdir.name)
@@ -197,7 +218,8 @@ def main() -> None:
     plt.xlabel("Samples Evaluated")
     plt.ylabel("Mean Reward")
     title_mode = "best profile" if args.mode == "best" else "mean across profiles"
-    plt.title(f"Mean Reward vs Samples ({title_mode})")
+    title_suffix = f", window={args.window}" if args.window > 1 else ""
+    plt.title(f"Mean Reward vs Samples ({title_mode}{title_suffix})")
     plt.grid(True)
     plt.legend()
 
