@@ -71,7 +71,7 @@ def rewards_from_details(details: List[Dict[str, Any]]) -> List[float]:
     return out
 
 
-def compute_cum_avg(out_dir: Path) -> Tuple[List[float], int]:
+def compute_cum_avg(out_dir: Path, mode: str) -> Tuple[List[float], int]:
     progress_path = out_dir / "progress.jsonl"
     if not progress_path.exists():
         return [], 0
@@ -83,16 +83,46 @@ def compute_cum_avg(out_dir: Path) -> Tuple[List[float], int]:
     missing = 0
     for entry in progress:
         gen = int(entry.get("generation", 0))
-        best_profile = entry.get("best_profile") or {}
         gen_dir = out_dir / "debug" / f"gen_{gen}"
         records = load_records(gen_dir)
-        rec = best_match_record(records, best_profile)
-        if not rec:
+        if not records:
             missing += 1
             gen_rewards.append([])
             continue
-        rewards = rewards_from_details(rec.get("details") or [])
-        gen_rewards.append(rewards)
+
+        if mode == "best":
+            best_profile = entry.get("best_profile") or {}
+            rec = best_match_record(records, best_profile)
+            if not rec:
+                missing += 1
+                gen_rewards.append([])
+                continue
+            rewards = rewards_from_details(rec.get("details") or [])
+            gen_rewards.append(rewards)
+        else:
+            # mean reward per sample across all profiles in this generation
+            details_list = [r.get("details") or [] for r in records]
+            if not details_list:
+                missing += 1
+                gen_rewards.append([])
+                continue
+            n_samples = max(len(d) for d in details_list)
+            per_sample: List[float] = []
+            for i in range(n_samples):
+                vals = []
+                for details in details_list:
+                    if i >= len(details):
+                        continue
+                    v = details[i].get("reward")
+                    if v is None:
+                        continue
+                    try:
+                        vals.append(float(v))
+                    except Exception:
+                        continue
+                if vals:
+                    per_sample.append(sum(vals) / len(vals))
+            gen_rewards.append(per_sample)
 
     flat_rewards = [r for g in gen_rewards for r in g]
     if not flat_rewards:
@@ -113,6 +143,12 @@ def main() -> None:
     group.add_argument("--root", help="Root dir containing per-type output dirs")
     ap.add_argument("--out-path", default=None, help="Output image path")
     ap.add_argument("--types", nargs="*", default=None, help="Optional list of types to include")
+    ap.add_argument(
+        "--mode",
+        choices=["best", "mean"],
+        default="best",
+        help="Per-generation sample rewards: best profile only or mean across all profiles.",
+    )
     args = ap.parse_args()
 
     try:
@@ -122,7 +158,7 @@ def main() -> None:
 
     if args.out_dir:
         out_dir = Path(args.out_dir)
-        cum_avg, missing = compute_cum_avg(out_dir)
+        cum_avg, missing = compute_cum_avg(out_dir, args.mode)
         if not cum_avg:
             raise SystemExit("No rewards found from debug logs.")
 
@@ -130,7 +166,8 @@ def main() -> None:
         plt.plot(range(1, len(cum_avg) + 1), cum_avg, marker="o")
         plt.xlabel("Samples Evaluated")
         plt.ylabel("Cumulative Mean Reward")
-        plt.title("Cumulative Mean Reward vs Samples (best profile)")
+        title_mode = "best profile" if args.mode == "best" else "mean across profiles"
+        plt.title(f"Cumulative Mean Reward vs Samples ({title_mode})")
         plt.grid(True)
 
         out_path = Path(args.out_path) if args.out_path else out_dir / "best_value_reward.png"
@@ -153,7 +190,7 @@ def main() -> None:
     total_missing = 0
     plotted = 0
     for tdir in type_dirs:
-        cum_avg, missing = compute_cum_avg(tdir)
+        cum_avg, missing = compute_cum_avg(tdir, args.mode)
         if not cum_avg:
             continue
         total_missing += missing
@@ -165,7 +202,8 @@ def main() -> None:
 
     plt.xlabel("Samples Evaluated")
     plt.ylabel("Cumulative Mean Reward")
-    plt.title("Cumulative Mean Reward vs Samples (best profile)")
+    title_mode = "best profile" if args.mode == "best" else "mean across profiles"
+    plt.title(f"Cumulative Mean Reward vs Samples ({title_mode})")
     plt.grid(True)
     plt.legend()
 
