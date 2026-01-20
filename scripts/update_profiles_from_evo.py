@@ -22,6 +22,18 @@ def normalize_weights(weights: Dict[str, float]) -> Dict[str, float]:
     return {k: v / s for k, v in vals.items()}
 
 
+def round_weights(weights: Dict[str, float], ndigits: int) -> Dict[str, float]:
+    rounded = {k: round(float(v), ndigits) for k, v in weights.items()}
+    if not rounded:
+        return rounded
+    diff = 1.0 - sum(rounded.values())
+    if abs(diff) < 10 ** (-(ndigits + 1)):
+        return rounded
+    key = max(rounded, key=lambda k: rounded[k])
+    rounded[key] = round(rounded[key] + diff, ndigits)
+    return rounded
+
+
 def find_best_weights(result_path: Path) -> Dict[str, float] | None:
     data = json.loads(result_path.read_text(encoding="utf-8"))
     weights = None
@@ -39,6 +51,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--evo-root", type=str, default="outputs/profile_evo_exp_v7")
     ap.add_argument("--profile-init", type=str, default="artifacts/features/type_profile_semantics_init.json")
     ap.add_argument("--profile-out", type=str, default="artifacts/features/type_profile_semantics.json")
+    ap.add_argument("--round-decimals", type=int, default=3,
+                    help="Round objective_weights to this many decimals (<=0 to disable).")
     ap.add_argument("--dry-run", action="store_true")
     return ap.parse_args()
 
@@ -59,16 +73,19 @@ def main() -> None:
     current_map = {p.get("investor_type"): p for p in current_profiles if p.get("investor_type")}
 
     updated = []
-    for type_dir in sorted(p for p in evo_root.iterdir() if p.is_dir()):
+    type_dirs = sorted(
+        p for p in evo_root.iterdir()
+        if p.is_dir() and (p / "profile_evolution_results.json").exists()
+    )
+    for type_dir in type_dirs:
         inv_type = type_dir.name
         result_path = type_dir / "profile_evolution_results.json"
-        if not result_path.exists():
-            print(f"[skip] missing results: {result_path}")
-            continue
         weights = find_best_weights(result_path)
         if weights is None:
             print(f"[skip] no weights in: {result_path}")
             continue
+        if args.round_decimals and args.round_decimals > 0:
+            weights = round_weights(weights, args.round_decimals)
         if inv_type in current_map:
             entry = current_map[inv_type]
         elif inv_type in init_map:

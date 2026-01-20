@@ -26,7 +26,7 @@ fi
 mkdir -p "${LOG_DIR}"
 
 GPU0_TYPES=(banks insurance_companies)
-GPU1_TYPES=(investment_advisors households other)
+GPU1_TYPES=(investment_advisors other)
 GPU2_TYPES=(mutual_funds pension_funds)
 
 run_group() {

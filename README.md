@@ -183,6 +183,21 @@ merge them back into the default profile file **before** rebuilding GRPO/TEST:
 python scripts/merge_profile_outputs.py
 ```
 
+#### 7.3) Update type_profile_semantics.json from evolution outputs (objective_weights only)
+After evolution finishes, overwrite only `objective_weights` using the final evolved weights.
+This keeps `philosophy/constraints/summary` unchanged.
+
+```bash
+python scripts/update_profiles_from_evo.py \
+  --evo-root outputs/profile_evo_exp_v5 \
+  --profile-init artifacts/features/type_profile_semantics_init.json \
+  --profile-out artifacts/features/type_profile_semantics.json
+```
+
+Note: `build_type_datasets_typeagg_all` always reads
+`artifacts/features/type_profile_semantics.json`, so update that file (or replace it)
+before regenerating GRPO/TEST.
+
 ### 8) Stage C: rebuild GRPO + TEST with updated profiles
 ```bash
 SFT_END=2015-12-31 \
