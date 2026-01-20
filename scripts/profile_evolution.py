@@ -58,7 +58,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--k-reasoning", type=int, default=4)
     ap.add_argument("--mutation-sigma", type=float, default=0.05)
     ap.add_argument("--temperature", type=float, default=0.4)
-    ap.add_argument("--max-new-tokens", type=int, default=128)
+    ap.add_argument("--max-new-tokens", type=int, default=512)
     ap.add_argument("--batch-size", type=int, default=4)
     ap.add_argument("--torch-dtype", type=str, default="bfloat16")
     ap.add_argument("--profile-stats", type=str, default="data/grpo_profile_stats.csv")
@@ -167,7 +167,7 @@ def infer_in_batches(
                 batch_msgs,
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
-                force_think=False,
+                force_think=True,
             )
         )
     return outputs
