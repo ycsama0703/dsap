@@ -39,7 +39,7 @@ def main() -> None:
     ap.add_argument("--lora-path", type=str, default=None, help="LoRA checkpoint directory")
     ap.add_argument("--out-csv", type=str, default="outputs/debug_eval_outputs.csv")
     ap.add_argument("--batch-size", type=int, default=4)
-    ap.add_argument("--max-new-tokens", type=int, default=128)
+    ap.add_argument("--max-new-tokens", type=int, default=512)
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--torch-dtype", type=str, default="bfloat16")
     ap.add_argument("--limit", type=int, default=None)

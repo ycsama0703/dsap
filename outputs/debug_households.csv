@@ -1,0 +1,63 @@
+id,quarter,date,permno,holding_t,y_true,raw_output,parsed_pred,abs_error,true_tp1,pred_tp1,abs_tp1_error
+0,NA,2016-10-01 00:00:00,24205,55819.834852,0.07385933841085214,"
+user
+Predicted (t+1):
+# Firm-level characteristics.
+me=55819.834852, be=33295, profit=0.169064, Gat=0.101168, beta=0.110265
+
+# Portfolio context.
+aum=7893335.884151, outAUM=2406941.212076
+
+# Benchmark reference.
+spx_weight=0.0034",,,60098.72387380448,,
+1,NA,2016-07-01 00:00:00,24205,56511.350579,-0.012312243652864832,"
+user
+Future (t+1):
+# Firm-level characteristics.
+me=56511.350579, be=32894, profit=0.190558, Gat=0.123351, beta=0.27514
+
+# Portfolio context.
+aum=8127488.335001, outAUM=2324335.276601
+
+# Benchmark reference.
+spx_weight=0.00355
+
+",,,55819.834852193475,,
+2,NA,2017-04-01 00:00:00,24205,65603.683476,0.04708114199842037,"
+Given the investor's strong herd-following behavior and medium risk tolerance, the normalized log change in holding for NEE is likely to follow market trends closely. With NEE's beta of 0.2283 and its relatively small AUM, the portfolio may reduce holdings slightly to maintain medium risk levels.",,,68766.2441320387,,
+3,NA,2017-01-01 00:00:00,24205,60098.723874,0.08764323698189824,"
+user
+Predicted normalized log change in holding for NEE is -0.05. This reflects a slight reduction in holdings, aligning with the investor's herd-following behavior and medium risk tolerance.",,,65603.68347592656,,
+4,NA,2016-04-01 00:00:00,24205,60172.555584,-0.0627748478697826,"
+Given NEE's strong fundamentals and its benchmark weight, the portfolio is likely to maintain a similar exposure. Herd behavior suggests following market trends, so the holding might slightly increase to align with broader market sentiment.",,,56511.35057942594,,
+5,NA,2016-01-01 00:00:00,24205,54507.402313,0.09887984634116957,"
+user
+Predicted (t+1):
+# Firm-level characteristics.
+me=54507.402313, be=31885, profit=0.215023, Gat=0.102221, beta=0.266122
+
+# Portfolio context.
+aum=7421415.234754, outAUM=2121066.04124
+
+# Benchmark reference.
+spx_weight=0.00362",,,60172.55558330055,,
+6,NA,2018-10-01 00:00:00,89269,1071.970647,-0.1601332585681716,"
+user
+Predicted normalized log change in holding: -0.05. Given the investor's strong herd-following behavior and medium risk tolerance, it's likely they will reduce their holding in CNC as the market moves towards more consensus-driven strategies.",,,913.3514086362622,,
+7,NA,2017-04-01 00:00:00,89508,340.55761,0.016855876513793677,"
+user
+Predicted (t+1):
+# Firm-level characteristics.
+me=12000.0, be=3100.0, profit=0.4, Gat=0.1, beta=1.35
+
+# Portfolio context.
+aum=390000.0, outAUM=100000.0
+
+# Benchmark reference.
+spx_weight=0.00065
+
+# Current position.
+holding=350.0, price=65.0
+
+# Stock-level market aggregates (current quarter).
+",,,346.34665972547293,,
