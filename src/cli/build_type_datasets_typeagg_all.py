@@ -31,6 +31,46 @@ def discover_types(in_dir: Path) -> List[str]:
     return names
 
 
+def _parse_type_alias(raw: str) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if "=" not in item:
+            raise ValueError(f"invalid type alias '{item}', expected src=dst")
+        src, dst = item.split("=", 1)
+        src = src.strip()
+        dst = dst.strip()
+        if not src or not dst:
+            raise ValueError(f"invalid type alias '{item}', expected src=dst")
+        mapping[src] = dst
+    return mapping
+
+
+def _tmp_path(base: Path, tag: str) -> Path:
+    return base.with_name(f"{base.stem}.{tag}{base.suffix}")
+
+
+def _append_file(src: Path, dst: Path) -> int:
+    if not src.exists() or src.stat().st_size == 0:
+        return 0
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    n = 0
+    with src.open("r", encoding="utf-8") as fsrc, dst.open("a", encoding="utf-8") as fdst:
+        for line in fsrc:
+            fdst.write(line)
+            n += 1
+    return n
+
+
+def _safe_unlink(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Build SFT/GRPO datasets for all type-agg panels")
     ap.add_argument("--in-dir", type=Path, default=Path("data/processed/type_agg"),
@@ -68,6 +108,8 @@ def main() -> None:
                     help="Disable think/answer placeholder example in GRPO dataset")
     ap.add_argument("--emit-base-min-test", action="store_true",
                     help="Also emit base-min test set (single JSON output, no think).")
+    ap.add_argument("--type-alias", type=str, default="",
+                    help="Comma-separated rename mapping, e.g. other=households")
     args = ap.parse_args()
 
     if not args.in_dir.exists():
@@ -79,6 +121,8 @@ def main() -> None:
         types = discover_types(args.in_dir)
         if not types:
             raise FileNotFoundError(f"no parquet files in {args.in_dir}")
+
+    alias_map = _parse_type_alias(args.type_alias) if args.type_alias.strip() else {}
 
     mapping = None
     try:
@@ -104,6 +148,7 @@ def main() -> None:
     (out_root / "test").mkdir(parents=True, exist_ok=True)
 
     total = {"sft": 0, "grpo": 0, "test": 0}
+    written_types: set[str] = set()
 
     for t in types:
         in_file = args.in_dir / f"{t}.parquet"
@@ -111,14 +156,22 @@ def main() -> None:
             print(f"[typeagg-all] skip type={t}: {in_file} not found")
             continue
 
-        ph_sft = prompts_sft_dir / f"{t}.jsonl"
-        ph_grpo = prompts_grpo_dir / f"{t}.jsonl"
-        ph_test = prompts_test_dir / f"{t}.jsonl"
+        out_type = alias_map.get(t, t)
+        append = out_type in written_types
+        if out_type != t:
+            print(f"[typeagg-all] alias {t} -> {out_type}")
+
+        ph_sft = prompts_sft_dir / f"{out_type}.jsonl"
+        ph_grpo = prompts_grpo_dir / f"{out_type}.jsonl"
+        ph_test = prompts_test_dir / f"{out_type}.jsonl"
+        ph_sft_work = _tmp_path(ph_sft, t) if append else ph_sft
+        ph_grpo_work = _tmp_path(ph_grpo, t) if append else ph_grpo
+        ph_test_work = _tmp_path(ph_test, t) if append else ph_test
 
         print(f"[typeagg-all] {t}: build SFT prompts (<= {args.sft_end})")
         total["sft"] += build_for_file(
             in_file=in_file,
-            out_file=ph_sft,
+            out_file=ph_sft_work,
             per_type_limit=args.sft_limit,
             time_bins=args.time_bins,
             cap_per_pair=args.cap_per_pair,
@@ -139,11 +192,10 @@ def main() -> None:
             market_df=market_df,
             require_holding_t1=True,
         )
-
         print(f"[typeagg-all] {t}: build GRPO prompts ({args.grpo_start}..{args.grpo_end})")
         total["grpo"] += build_for_file(
             in_file=in_file,
-            out_file=ph_grpo,
+            out_file=ph_grpo_work,
             per_type_limit=args.grpo_limit,
             time_bins=args.time_bins,
             cap_per_pair=args.cap_per_pair,
@@ -168,7 +220,7 @@ def main() -> None:
         print(f"[typeagg-all] {t}: build TEST prompts (>= {args.test_start})")
         total["test"] += build_for_file(
             in_file=in_file,
-            out_file=ph_test,
+            out_file=ph_test_work,
             per_type_limit=args.sft_limit,
             time_bins=args.time_bins,
             cap_per_pair=args.cap_per_pair,
@@ -190,13 +242,16 @@ def main() -> None:
             require_holding_t1=False,
         )
 
-        system_prompt = _build_system_prompt(t)
+        system_prompt = _build_system_prompt(out_type)
 
-        sft_input = ph_sft
+        sft_input = ph_sft_work if append else ph_sft
+        sft_think_work = None
         if args.sft_with_think and args.sft_think_source == "deepseek":
-            sft_think = out_root / "prompts_hist_sft_with_think" / f"{t}.jsonl"
+            sft_think = out_root / "prompts_hist_sft_with_think" / f"{out_type}.jsonl"
+            if append:
+                sft_think = _tmp_path(sft_think, t)
             _enrich_prompts_with_deepseek(
-                ph_sft,
+                ph_sft if not append else ph_sft_work,
                 sft_think,
                 curr_only_prompt=True,
                 strict=args.sft_think_strict,
@@ -208,64 +263,94 @@ def main() -> None:
             if not sft_think.exists() or sft_think.stat().st_size == 0:
                 raise RuntimeError(f"[typeagg-all] DeepSeek output empty: {sft_think}")
             sft_input = sft_think
+            sft_think_work = sft_think
 
-        sft_out = out_root / "sft" / f"sft_train_{t}.jsonl"
+        sft_out = out_root / "sft" / f"sft_train_{out_type}.jsonl"
+        sft_out_work = _tmp_path(sft_out, t) if append else sft_out
         print(f"[typeagg-all] {t}: convert SFT -> {sft_out}")
         _convert_prompts_to_sft(
             sft_input,
-            sft_out,
+            sft_out_work,
             system=system_prompt,
-            inv_type=t,
+            inv_type=out_type,
             with_think=args.sft_with_think,
             contract_mode="delta",
             decimals=2,
             think_template="",
             profile_mode=args.sft_profile_mode,
-            label=f"sft_train_{t}",
+            label=f"sft_train_{out_type}",
             progress_every=100,
             curr_only_prompt=True,
         )
+        if append:
+            _append_file(sft_out_work, sft_out)
+            _safe_unlink(sft_out_work)
+        if sft_think_work is not None and append:
+            _safe_unlink(sft_think_work)
 
-        grpo_out = out_root / "grpo" / f"grpo_{t}.jsonl"
+        grpo_out = out_root / "grpo" / f"grpo_{out_type}.jsonl"
+        grpo_out_work = _tmp_path(grpo_out, t) if append else grpo_out
         print(f"[typeagg-all] {t}: convert GRPO -> {grpo_out}")
         _convert_prompts_to_grpo(
-            ph_grpo,
-            grpo_out,
+            ph_grpo if not append else ph_grpo_work,
+            grpo_out_work,
             system=system_prompt,
-            inv_type=t,
+            inv_type=out_type,
             no_think_example=args.grpo_no_think_example,
-            label=f"grpo_{t}",
+            label=f"grpo_{out_type}",
             progress_every=100,
             curr_only_prompt=True,
         )
+        if append:
+            _append_file(grpo_out_work, grpo_out)
+            _safe_unlink(grpo_out_work)
 
-        test_out = out_root / "test" / f"test_{t}_all.jsonl"
+        test_out = out_root / "test" / f"test_{out_type}_all.jsonl"
+        test_out_work = _tmp_path(test_out, t) if append else test_out
         print(f"[typeagg-all] {t}: convert TEST -> {test_out}")
         _convert_prompts_to_test_optional_label(
-            ph_test,
-            test_out,
+            ph_test if not append else ph_test_work,
+            test_out_work,
             system=system_prompt,
-            inv_type=t,
-            label=f"test_{t}_all",
+            inv_type=out_type,
+            label=f"test_{out_type}_all",
             progress_every=100,
             curr_only_prompt=True,
         )
+        if append:
+            _append_file(test_out_work, test_out)
+            _safe_unlink(test_out_work)
         if args.emit_base_min_test:
-            base_min_out = out_root / "test" / f"test_{t}_base_min.jsonl"
+            base_min_out = out_root / "test" / f"test_{out_type}_base_min.jsonl"
+            base_min_out_work = _tmp_path(base_min_out, t) if append else base_min_out
             print(f"[typeagg-all] {t}: convert TEST -> base-min ({base_min_out})")
             _convert_prompts_to_test_optional_label(
-                ph_test,
-                base_min_out,
+                ph_test if not append else ph_test_work,
+                base_min_out_work,
                 system=system_prompt,
                 system_suffix=(
                     "Output only <answer>{\"holding_log_delta\": <number>}</answer>. "
                     "No <think> section. No other text."
                 ),
-                inv_type=t,
-                label=f"test_base_min_{t}",
+                inv_type=out_type,
+                label=f"test_base_min_{out_type}",
                 progress_every=100,
                 curr_only_prompt=True,
             )
+            if append:
+                _append_file(base_min_out_work, base_min_out)
+                _safe_unlink(base_min_out_work)
+
+        if append:
+            _append_file(ph_sft_work, ph_sft)
+            _append_file(ph_grpo_work, ph_grpo)
+            _append_file(ph_test_work, ph_test)
+            _safe_unlink(ph_sft_work)
+            _safe_unlink(ph_grpo_work)
+            _safe_unlink(ph_test_work)
+
+        if out_type not in written_types:
+            written_types.add(out_type)
 
     print("[typeagg-all] done")
     print(f"[typeagg-all] total prompts: sft={total['sft']} grpo={total['grpo']} test={total['test']}")

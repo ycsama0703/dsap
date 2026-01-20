@@ -16,6 +16,9 @@ TYPE_ARGS=()
 if [[ -n "${TYPES:-}" ]]; then
   TYPE_ARGS+=(--types "$TYPES")
 fi
+if [[ -n "${TYPE_ALIAS:-}" ]]; then
+  TYPE_ARGS+=(--type-alias "$TYPE_ALIAS")
+fi
 
 EXTRA_ARGS=()
 if [[ "$RANDOM_SAMPLE" == "1" ]]; then

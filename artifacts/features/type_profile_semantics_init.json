@@ -136,5 +136,28 @@
       "herd_tendency": "medium"
     },
     "summary": "This investor is strongly profit-driven with a growth-oriented, active approach that prioritizes returns over benchmark tracking. While maintaining a long-term horizon, they accept higher risk and turnover to achieve their objectives, with moderate herd behavior and concentration constraints."
+  },
+  {
+    "profile_id": "households_p0",
+    "investor_type": "households",
+    "profile_k": 0,
+    "objective_weights": {
+      "risk_aversion": 0.2199385086493572,
+      "herd_behavior": 0.7040801315865907,
+      "profit_driven": 0.075981359764052
+    },
+    "philosophy": {
+      "style": "balanced",
+      "activity": "low_turnover",
+      "benchmark_orientation": "high",
+      "horizon": "medium"
+    },
+    "constraints": {
+      "risk_tolerance": "medium",
+      "turnover_constraint": "high",
+      "concentration_constraint": "medium",
+      "herd_tendency": "high"
+    },
+    "summary": "This investor exhibits strong herd-following behavior with a high orientation toward benchmarks, while maintaining moderate risk aversion and low profit-driven motivation. The profile suggests a cautious, consensus-driven approach that prioritizes alignment with market trends over aggressive independent strategies."
   }
 ]

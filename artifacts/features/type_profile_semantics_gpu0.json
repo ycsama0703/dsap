@@ -1,0 +1,140 @@
+[
+  {
+    "profile_id": "banks_p0",
+    "investor_type": "banks",
+    "profile_k": 0,
+    "objective_weights": {
+      "risk_aversion": 0.2557842734447492,
+      "herd_behavior": 0.2351087465195388,
+      "profit_driven": 0.5091069800357121
+    },
+    "philosophy": {
+      "style": "growth",
+      "activity": "high_turnover",
+      "benchmark_orientation": "low",
+      "horizon": "medium"
+    },
+    "constraints": {
+      "risk_tolerance": "medium",
+      "turnover_constraint": "low",
+      "concentration_constraint": "medium",
+      "herd_tendency": "medium"
+    },
+    "summary": "Banks are primarily profit-driven investors with a growth-oriented, active approach that prioritizes returns over strict benchmark adherence. They exhibit moderate risk tolerance and herd behavior while operating with relatively low turnover constraints."
+  },
+  {
+    "profile_id": "insurance_companies_p0",
+    "investor_type": "insurance_companies",
+    "profile_k": 0,
+    "objective_weights": {
+      "risk_aversion": 0.34999965000035,
+      "herd_behavior": 0.44999955000045005,
+      "profit_driven": 0.19999980000020004
+    },
+    "philosophy": {
+      "style": "defensive",
+      "activity": "low_turnover",
+      "benchmark_orientation": "high",
+      "horizon": "long"
+    },
+    "constraints": {
+      "risk_tolerance": "low",
+      "turnover_constraint": "high",
+      "concentration_constraint": "medium",
+      "herd_tendency": "high"
+    },
+    "summary": "Insurance companies are highly risk-averse, long-term investors with strong herd behavior and minimal profit-driven motives. Their investment approach is defensive, benchmark-oriented, and constrained by low risk tolerance and high turnover limitations."
+  },
+  {
+    "profile_id": "investment_advisors_p0",
+    "investor_type": "investment_advisors",
+    "profile_k": 0,
+    "objective_weights": {
+      "risk_aversion": 0.6133545717437864,
+      "herd_behavior": 0.2705075669811561,
+      "profit_driven": 0.1161378612750575
+    },
+    "philosophy": {
+      "style": "balanced",
+      "activity": "medium",
+      "benchmark_orientation": "high",
+      "horizon": "medium"
+    },
+    "constraints": {
+      "risk_tolerance": "low",
+      "turnover_constraint": "high",
+      "concentration_constraint": "medium",
+      "herd_tendency": "medium"
+    },
+    "summary": "Investment advisors prioritize client capital preservation with a strong focus on benchmark alignment, leading to a balanced, low-risk approach with moderate herd tendencies. Their fiduciary responsibility results in high turnover constraints and a preference for diversified, steady strategies over aggressive profit-seeking."
+  },
+  {
+    "profile_id": "mutual_funds_p0",
+    "investor_type": "mutual_funds",
+    "profile_k": 0,
+    "objective_weights": {
+      "risk_aversion": 0.1355307506036281,
+      "herd_behavior": 0.8161556972292062,
+      "profit_driven": 0.0483135521671656
+    },
+    "philosophy": {
+      "style": "balanced",
+      "activity": "medium",
+      "benchmark_orientation": "high",
+      "horizon": "medium"
+    },
+    "constraints": {
+      "risk_tolerance": "low",
+      "turnover_constraint": "high",
+      "concentration_constraint": "medium",
+      "herd_tendency": "high"
+    },
+    "summary": "This investor profile reflects a mutual fund that prioritizes safety and closely tracks benchmarks, with a strong tendency to follow market consensus. The approach is characterized by low risk tolerance, high herd behavior, and a disciplined, benchmark-oriented strategy."
+  },
+  {
+    "profile_id": "other_p0",
+    "investor_type": "other",
+    "profile_k": 0,
+    "objective_weights": {
+      "risk_aversion": 0.2199385086493572,
+      "herd_behavior": 0.7040801315865907,
+      "profit_driven": 0.075981359764052
+    },
+    "philosophy": {
+      "style": "balanced",
+      "activity": "low_turnover",
+      "benchmark_orientation": "high",
+      "horizon": "medium"
+    },
+    "constraints": {
+      "risk_tolerance": "medium",
+      "turnover_constraint": "high",
+      "concentration_constraint": "medium",
+      "herd_tendency": "high"
+    },
+    "summary": "This investor exhibits strong herd-following behavior with a high orientation toward benchmarks, while maintaining moderate risk aversion and low profit-driven motivation. The profile suggests a cautious, consensus-driven approach that prioritizes alignment with market trends over aggressive independent strategies."
+  },
+  {
+    "profile_id": "pension_funds_p0",
+    "investor_type": "pension_funds",
+    "profile_k": 0,
+    "objective_weights": {
+      "risk_aversion": 0.1129360738603384,
+      "herd_behavior": 0.170051101571291,
+      "profit_driven": 0.7170128245683705
+    },
+    "philosophy": {
+      "style": "growth",
+      "activity": "high_turnover",
+      "benchmark_orientation": "low",
+      "horizon": "long"
+    },
+    "constraints": {
+      "risk_tolerance": "high",
+      "turnover_constraint": "low",
+      "concentration_constraint": "medium",
+      "herd_tendency": "medium"
+    },
+    "summary": "This investor is strongly profit-driven with a growth-oriented, active approach that prioritizes returns over benchmark tracking. While maintaining a long-term horizon, they accept higher risk and turnover to achieve their objectives, with moderate herd behavior and concentration constraints."
+  }
+]
