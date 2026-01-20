@@ -78,18 +78,20 @@ run_group() {
       update_state "train" "${t}"
       local dataset="${GRPO_ROOT}/grpo/grpo_${t}.jsonl"
       local out_dir="${ROOT_DIR}/outputs/grpo_${t}"
-      local adapters="${SFT_ROOT}/${t}"
+      local adapter_root="${SFT_ROOT}/${t}"
+      local adapters
+      adapters=$(ls -td "${adapter_root}"/v*/checkpoint-* 2>/dev/null | head -n 1)
       if [[ ! -f "${dataset}" ]]; then
         echo "[gpu${gpu}] [skip] missing dataset: ${dataset}"
         done_train=$((done_train + 1))
         continue
       fi
-      if [[ ! -d "${adapters}" ]]; then
-        echo "[gpu${gpu}] [skip] missing adapters: ${adapters}"
+      if [[ -z "${adapters}" || ! -d "${adapters}" ]]; then
+        echo "[gpu${gpu}] [skip] missing adapters under: ${adapter_root}"
         done_train=$((done_train + 1))
         continue
       fi
-      echo "[gpu${gpu}] [train] ${t}"
+      echo "[gpu${gpu}] [train] ${t} adapters=${adapters}"
       CUDA_VISIBLE_DEVICES="${gpu}" PYTHONPATH="${ROOT_DIR}" \
         bash "${ROOT_DIR}/scripts/grpo.sh" \
           -m "${BASE_MODEL}" \
