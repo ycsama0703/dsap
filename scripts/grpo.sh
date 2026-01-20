@@ -31,7 +31,7 @@ LORA_ALPHA=128
 # 默认使用：格式 + 数值 + Profile 约束（方向奖励关闭）
 # 可按需在命令行用 -F/-W 覆盖
 REWARD_FUNCS=(contract_holdings huber_holdings profile_numeric_deviation)
-REWARD_WEIGHTS=(0.05 0.70 0.25)
+REWARD_WEIGHTS=(0.1 0.4 0.5)
 
 # Optional logging targets (can also be supplied via environment variables, e.g. SWIFT_REPORT_TO=swanlab)
 REPORT_TO="${SWIFT_REPORT_TO:-}"

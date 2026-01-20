@@ -98,7 +98,7 @@ run_group() {
           -d "${dataset}" \
           -o "${out_dir}" \
           -a "${adapters}" \
-          -g 8 \
+          -g 4 \
           -l 512
       done_train=$((done_train + 1))
       update_state "train" "${t}"
