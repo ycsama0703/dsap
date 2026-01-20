@@ -189,7 +189,7 @@ def load_model_and_tokenizer(base_model: str, lora_path: str|None, torch_dtype="
 
 @torch.no_grad()
 def infer_chat_batch(tokenizer, model, list_messages: List[List[Dict[str,str]]],
-                     max_new_tokens=48, temperature=0.0, force_think: bool = False) -> List[str]:
+                     max_new_tokens=48, temperature=0.0, force_think: bool = True) -> List[str]:
     prompts = []
     for msgs in list_messages:
         prompt = tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True).rstrip()
