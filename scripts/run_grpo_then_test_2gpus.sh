@@ -45,11 +45,9 @@ mkdir -p "${STATE_DIR}"
 
 GPU0="${GPU0:-0}"
 GPU1="${GPU1:-1}"
-GPU2="${GPU2:-2}"
 
-GPU0_TYPES=(banks insurance_companies)
-GPU1_TYPES=(investment_advisors other)
-GPU2_TYPES=(mutual_funds pension_funds)
+GPU0_TYPES=(banks insurance_companies investment_advisors)
+GPU1_TYPES=(other mutual_funds pension_funds)
 
 run_group() {
   local gpu="$1"
@@ -143,8 +141,6 @@ run_group "${GPU0}" "${GPU0_TYPES[@]}" &
 pid0=$!
 run_group "${GPU1}" "${GPU1_TYPES[@]}" &
 pid1=$!
-run_group "${GPU2}" "${GPU2_TYPES[@]}" &
-pid2=$!
 
 print_summary() {
   local file="$1"
@@ -159,12 +155,10 @@ while true; do
   alive=0
   if kill -0 "${pid0}" 2>/dev/null; then alive=1; fi
   if kill -0 "${pid1}" 2>/dev/null; then alive=1; fi
-  if kill -0 "${pid2}" 2>/dev/null; then alive=1; fi
 
   s0=$(print_summary "${STATE_DIR}/gpu${GPU0}.txt")
   s1=$(print_summary "${STATE_DIR}/gpu${GPU1}.txt")
-  s2=$(print_summary "${STATE_DIR}/gpu${GPU2}.txt")
-  printf "\r[gpu%s] %s | [gpu%s] %s | [gpu%s] %s" "${GPU0}" "${s0}" "${GPU1}" "${s1}" "${GPU2}" "${s2}"
+  printf "\r[gpu%s] %s | [gpu%s] %s" "${GPU0}" "${s0}" "${GPU1}" "${s1}"
   if [[ "${alive}" -eq 0 ]]; then
     echo
     break
@@ -172,5 +166,5 @@ while true; do
   sleep "${PROGRESS_INTERVAL}"
 done
 
-wait "${pid0}" "${pid1}" "${pid2}"
-echo "[done] logs: ${LOG_DIR}/gpu{${GPU0},${GPU1},${GPU2}}.log"
+wait "${pid0}" "${pid1}"
+echo "[done] logs: ${LOG_DIR}/gpu{${GPU0},${GPU1}}.log"
