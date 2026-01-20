@@ -7,6 +7,7 @@ GRPO_ROOT="${GRPO_ROOT:-artifacts/typeagg_all_v2}"
 EVAL_ROOT="${EVAL_ROOT:-${GRPO_ROOT}}"
 OUT_ROOT="${OUT_ROOT:-outputs/test_eval_v1}"
 LOG_DIR="${LOG_DIR:-outputs/grpo_test_logs}"
+SFT_ROOT="${SFT_ROOT:-outputs/sft_output}"
 MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-512}"
 BATCH_SIZE="${BATCH_SIZE:-8}"
 PROGRESS_INTERVAL="${PROGRESS_INTERVAL:-5}"
@@ -33,6 +34,9 @@ if [[ "$OUT_ROOT" != /* ]]; then
 fi
 if [[ "$LOG_DIR" != /* ]]; then
   LOG_DIR="${ROOT_DIR}/${LOG_DIR}"
+fi
+if [[ "$SFT_ROOT" != /* ]]; then
+  SFT_ROOT="${ROOT_DIR}/${SFT_ROOT}"
 fi
 
 mkdir -p "${LOG_DIR}"
@@ -67,13 +71,14 @@ run_group() {
     echo "[gpu${gpu}] start $(date -u +"%F %T")"
     echo "[gpu${gpu}] grpo_root=${GRPO_ROOT}"
     echo "[gpu${gpu}] eval_root=${EVAL_ROOT}"
+    echo "[gpu${gpu}] sft_root=${SFT_ROOT}"
     update_state "start" "-"
 
     for t in "${types[@]}"; do
       update_state "train" "${t}"
       local dataset="${GRPO_ROOT}/grpo/grpo_${t}.jsonl"
       local out_dir="${ROOT_DIR}/outputs/grpo_${t}"
-      local adapters="${ROOT_DIR}/outputs/sft_output/${t}"
+      local adapters="${SFT_ROOT}/${t}"
       if [[ ! -f "${dataset}" ]]; then
         echo "[gpu${gpu}] [skip] missing dataset: ${dataset}"
         done_train=$((done_train + 1))
